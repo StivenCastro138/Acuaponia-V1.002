@@ -23,7 +23,7 @@ reportlab>=4.0
 
 # --- Theming ---
 pyqtdarktheme==2.1.0
-darkdetect>=0.8
+darkdetect>=0.7.1,<0.8.0
 
 # --- Web / Mobile ---
 Flask>=3.0
