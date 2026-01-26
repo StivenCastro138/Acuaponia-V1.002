@@ -1256,9 +1256,17 @@ class MainWindow(QMainWindow):
         
         # ID
         txt_fish_id = QLineEdit()
-        if hasattr(self, 'db'):
-            next_num = self.db.get_next_fish_number()
-            txt_fish_id.setText(f"EXT_{next_num}") 
+        if hasattr(self, 'txt_manual_fish_id'):
+            self.txt_manual_fish_id.clear()
+            if hasattr(self, 'db'):
+                next_num = self.db.get_next_fish_number()
+            else:
+                next_num = "1" 
+            
+            nuevo_id = f"EXT_{next_num}"
+            self.txt_manual_fish_id.setText(nuevo_id)
+            self.txt_manual_fish_id.style().unpolish(self.txt_manual_fish_id)
+            self.txt_manual_fish_id.style().polish(self.txt_manual_fish_id)
         
         txt_fish_id.setPlaceholderText("Ej: Lote_01")
         txt_fish_id.setToolTip("Número identificador único para el pez.")
@@ -1459,9 +1467,17 @@ class MainWindow(QMainWindow):
         form_grid.setSpacing(10)
         
         txt_id = QLineEdit()
-        if hasattr(self, 'db'):
-             prefix = "QR" if is_mobile else "EXT"
-             txt_id.setText(f"{prefix}_{self.db.get_next_fish_number()}")
+        if hasattr(self, 'txt_manual_fish_id'):
+            if hasattr(self, 'db'):
+                prefix = "QR" if is_mobile else "EXT"
+                
+                next_num = self.db.get_next_fish_number()
+                
+                self.txt_manual_fish_id.setText(f"{prefix}_{next_num}")
+
+                self.txt_manual_fish_id.style().unpolish(self.txt_manual_fish_id)
+                self.txt_manual_fish_id.style().polish(self.txt_manual_fish_id)
+            
         txt_id.setPlaceholderText("Ej: TRUCHA-001")
         txt_id.setToolTip("Número identificador único para el pez.")
         
@@ -2646,6 +2662,9 @@ class MainWindow(QMainWindow):
         btn_search.setToolTip("Aplica los filtros de texto, tipo y fecha seleccionados.")
         btn_search.clicked.connect(self.reset_pagination_and_refresh)
         btn_container.addWidget(btn_search)
+
+        btn_search.style().unpolish(btn_search)
+        btn_search.style().polish(btn_search)
 
         btn_clear = QPushButton("Limpiar")
         btn_clear.setProperty("class", "secondary")
