@@ -794,14 +794,19 @@ class MainWindow(QMainWindow):
         
         self.btn_capture = QPushButton("Captura Forzada")
         self.btn_capture.setProperty("class", "primary") 
+        self.btn_capture.style().unpolish(self.btn_capture) 
+        self.btn_capture.style().polish(self.btn_capture)
         self.btn_capture.setCursor(Qt.PointingHandCursor)
         self.btn_capture.setToolTip("Captura y analiza inmediatamente lo que hay en cámara.")
         self.btn_capture.clicked.connect(self.capture_and_analyze)
         controls_layout.addWidget(self.btn_capture)
         
+        
         self.btn_auto_capture = QPushButton("▶️ Activar Auto-Captura")
         self.btn_auto_capture.setCheckable(True)
         self.btn_auto_capture.setProperty("class", "secondary") 
+        self.btn_auto_capture.style().unpolish(self.btn_auto_capture) 
+        self.btn_auto_capture.style().polish(self.btn_auto_capture)
         self.btn_auto_capture.setCursor(Qt.PointingHandCursor)
         self.btn_auto_capture.setToolTip("El sistema detectará automáticamente cuando el pez esté quieto para medirlo.")
         self.btn_auto_capture.clicked.connect(self.toggle_auto_capture)
@@ -809,6 +814,8 @@ class MainWindow(QMainWindow):
         
         self.btn_save = QPushButton("Guardar")
         self.btn_save.setProperty("class", "success")
+        self.btn_save.style().unpolish(self.btn_save) 
+        self.btn_save.style().polish(self.btn_save)
         self.btn_save.setCursor(Qt.ForbiddenCursor)
         self.btn_save.setEnabled(False)
         self.btn_save.setToolTip("Primero debe haber una medición para guardar.")
@@ -955,6 +962,8 @@ class MainWindow(QMainWindow):
         
         self.btn_qr =QPushButton("Cargar Imagen del Móvil")
         self.btn_qr.setProperty("class", "info") 
+        self.btn_qr.style().unpolish(self.btn_qr) 
+        self.btn_qr.style().polish(self.btn_qr)
         self.btn_qr.setCursor(Qt.PointingHandCursor)
         self.btn_qr.setToolTip("Cargar una fotografía en vivo desde el celular.")
         self.btn_qr.clicked.connect(self.launch_qr_capture)
@@ -963,6 +972,8 @@ class MainWindow(QMainWindow):
         
         self.btn_load_image = QPushButton("Cargar Imagen del PC")
         self.btn_load_image.setProperty("class", "info") 
+        self.btn_load_image.style().unpolish(self.btn_load_image) 
+        self.btn_load_image.style().polish(self.btn_load_image)
         self.btn_load_image.setCursor(Qt.PointingHandCursor)
         self.btn_load_image.setToolTip("Cargar una fotografía de un pez guardada previamente en el equipo.")
         self.btn_load_image.clicked.connect(self.load_external_image)
@@ -971,6 +982,8 @@ class MainWindow(QMainWindow):
         
         self.btn_manual_capture = QPushButton("Capturar Foto")
         self.btn_manual_capture.setProperty("class", "success")
+        self.btn_manual_capture.style().unpolish(self.btn_manual_capture)
+        self.btn_manual_capture.style().polish(self.btn_manual_capture)
         self.btn_manual_capture.setCursor(Qt.PointingHandCursor)
         self.btn_manual_capture.setToolTip("Congelar la imagen de las cámaras para iniciar la medición.")
         self.btn_manual_capture.clicked.connect(self.handle_manual_capture_popout)
@@ -987,6 +1000,8 @@ class MainWindow(QMainWindow):
         # Botón Asistente IA
         self.btn_manual_ai_assist = QPushButton("Asistente IA")
         self.btn_manual_ai_assist.setProperty("class", "primary")
+        self.btn_manual_ai_assist.style().unpolish(self.btn_manual_ai_assist)
+        self.btn_manual_ai_assist.style().polish(self.btn_manual_ai_assist)
         self.btn_manual_ai_assist.setCursor(Qt.PointingHandCursor)
         self.btn_manual_ai_assist.setToolTip("Utilizar Inteligencia Artificial para detectar las medidas automáticamente sobre la foto capturada.")
         self.btn_manual_ai_assist.clicked.connect(self.run_ai_assist_manual)
@@ -994,7 +1009,9 @@ class MainWindow(QMainWindow):
         
         # Botón Descartar
         self.btn_manual_discard = QPushButton("Cancelar")
-        self.btn_manual_discard.setProperty("class", "warning") 
+        self.btn_manual_discard.setProperty("class", "warning")
+        self.btn_manual_discard.style().unpolish(self.btn_manual_discard)
+        self.btn_manual_discard.style().polish(self.btn_manual_discard) 
         self.btn_manual_discard.setCursor(Qt.PointingHandCursor)
         self.btn_manual_discard.setToolTip("Borrar la captura actual y volver al modo de video en vivo.")
         self.btn_manual_discard.clicked.connect(self.discard_manual_photo)
@@ -1003,6 +1020,8 @@ class MainWindow(QMainWindow):
         # Botón Guardar
         self.btn_manual_save = QPushButton("Guardar")
         self.btn_manual_save.setProperty("class", "success")
+        self.btn_manual_save.style().unpolish(self.btn_manual_save)
+        self.btn_manual_save.style().polish(self.btn_manual_save)
         self.btn_manual_save.setCursor(Qt.PointingHandCursor)
         self.btn_manual_save.setToolTip("Guardar los datos actuales y la fotografía en la base de datos.")
         self.btn_manual_save.clicked.connect(self.save_manual_measurement)
@@ -2555,15 +2574,18 @@ class MainWindow(QMainWindow):
         # --- Botón Recargar ---
         btn_refresh = QPushButton("Recargar")
         btn_refresh.setProperty("class", "secondary")
+        btn_refresh.style().unpolish(btn_refresh)
+        btn_refresh.style().polish(btn_refresh)
         btn_refresh.setCursor(Qt.PointingHandCursor)
-        btn_refresh.setToolTip("Recarga la tabla con la información más reciente"
-)
+        btn_refresh.setToolTip("Recarga la tabla con la información más reciente")
         btn_refresh.clicked.connect(self.refresh_history)
         top_controls.addWidget(btn_refresh)
 
         # --- Botón Editar ---
         btn_edit = QPushButton("Editar")
         btn_edit.setProperty("class", "info")
+        btn_edit.style().unpolish(btn_edit)
+        btn_edit.style().polish(btn_edit)
         btn_edit.setCursor(Qt.PointingHandCursor)
         btn_edit.setToolTip("Abre un editor para cambiar notas o corregir<br>"
                                 "datos de la fila seleccionada.")
@@ -2573,6 +2595,8 @@ class MainWindow(QMainWindow):
         # --- Botón Eliminar ---
         btn_delete = QPushButton("Eliminar")
         btn_delete.setProperty("class", "warning")
+        btn_delete.style().unpolish(btn_delete)
+        btn_delete.style().polish(btn_delete)
         btn_delete.setCursor(Qt.PointingHandCursor)
         btn_delete.setToolTip("Elimina permanentemente la medición seleccionada<br>"
                                 "y su imagen asociada.")
@@ -2643,6 +2667,8 @@ class MainWindow(QMainWindow):
         
         btn_search = QPushButton("Buscar")
         btn_search.setProperty("class", "primary")
+        btn_search.style().unpolish(btn_search)
+        btn_search.style().polish(btn_search)
         btn_search.setCursor(Qt.PointingHandCursor)
         btn_search.setToolTip("Aplica los filtros de texto, tipo y fecha seleccionados.")
         btn_search.clicked.connect(self.reset_pagination_and_refresh)
@@ -2652,6 +2678,8 @@ class MainWindow(QMainWindow):
 
         btn_clear = QPushButton("Limpiar")
         btn_clear.setProperty("class", "secondary")
+        btn_clear.style().unpolish(btn_clear)
+        btn_clear.style().polish(btn_clear)
         btn_clear.setCursor(Qt.PointingHandCursor)
         btn_clear.setToolTip("Reinicia todos los filtros a su estado original.")
         btn_clear.clicked.connect(self.clear_filters) 
@@ -2710,6 +2738,8 @@ class MainWindow(QMainWindow):
         self.btn_prev_page = QPushButton() 
         self.btn_prev_page.setFixedSize(30, 30)
         self.btn_prev_page.setProperty("class", "secondary")
+        self.btn_prev_page.style().unpolish(self.btn_prev_page)
+        self.btn_prev_page.style().polish(self.btn_prev_page)
         self.btn_prev_page.setCursor(Qt.PointingHandCursor)
         self.btn_prev_page.setToolTip("Ir a la página anterior.")
         icon_left = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowLeft)
@@ -2729,6 +2759,8 @@ class MainWindow(QMainWindow):
         self.btn_next_page = QPushButton() 
         self.btn_next_page.setFixedSize(30, 30)
         self.btn_next_page.setProperty("class", "secondary")
+        self.btn_next_page.style().unpolish(self.btn_next_page)
+        self.btn_next_page.style().polish(self.btn_next_page)
         self.btn_next_page.setCursor(Qt.PointingHandCursor)
         self.btn_next_page.setToolTip("Ir a la página siguiente.")
         icon_right = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight)
@@ -2763,6 +2795,7 @@ class MainWindow(QMainWindow):
         self.current_page_offset = 0
         self.refresh_history()
         self.refresh_daily_counter()
+        self.sender().clearFocus()
 
     def next_page(self):
         """Avanza de página basado en el límite seleccionado"""
@@ -2946,6 +2979,8 @@ class MainWindow(QMainWindow):
 
         btn_generate_stats = QPushButton("Generar Estadísticas")
         btn_generate_stats.setProperty("class", "primary")  
+        btn_generate_stats.style().unpolish(btn_generate_stats)
+        btn_generate_stats.style().polish(btn_generate_stats)
         btn_generate_stats.setCursor(Qt.PointingHandCursor)
         btn_generate_stats.setToolTip(
             "Analiza las mediciones de la base de datos, calcula promedios<br>"
@@ -2956,7 +2991,6 @@ class MainWindow(QMainWindow):
         
         controls.addStretch()
         layout.addLayout(controls)
-
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         
@@ -3029,6 +3063,8 @@ class MainWindow(QMainWindow):
             btn = QPushButton(text)
             btn.setProperty("class", "secondary")
             btn.setCursor(Qt.PointingHandCursor)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
             btn.setToolTip(tip)
             btn.clicked.connect(lambda checked, x=key: self.export_individual_graph(x))
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred) 
@@ -3043,6 +3079,8 @@ class MainWindow(QMainWindow):
         # Botón CSV
         btn_csv = QPushButton("Exportar CSV (Excel)")
         btn_csv.setProperty("class", "success") 
+        btn_csv.style().unpolish(btn_csv)
+        btn_csv.style().polish(btn_csv)
         btn_csv.setCursor(Qt.PointingHandCursor)
         btn_csv.setToolTip(
             "Descarga todas las mediciones en formato .CSV"
@@ -3051,7 +3089,9 @@ class MainWindow(QMainWindow):
         tools_layout.addWidget(btn_csv)
         
         btn_export_stats = QPushButton("Exportar Gráficos (PNG)")
-        btn_export_stats.setProperty("class", "success")   
+        btn_export_stats.setProperty("class", "success") 
+        btn_export_stats.style().unpolish(btn_export_stats) 
+        btn_export_stats.style().polish(btn_export_stats)  
         btn_export_stats.setCursor(Qt.PointingHandCursor)
         btn_export_stats.setToolTip(
             "Guarda los gráficos actuales como archivos de imagen (PNG)."
@@ -3060,7 +3100,9 @@ class MainWindow(QMainWindow):
         tools_layout.addWidget(btn_export_stats)
 
         btn_export_pdf = QPushButton("Reporte PDF")
-        btn_export_pdf.setProperty("class", "success")        
+        btn_export_pdf.setProperty("class", "success") 
+        btn_export_pdf.style().unpolish(btn_export_pdf) 
+        btn_export_pdf.style().polish(btn_export_pdf)       
         btn_export_pdf.setCursor(Qt.PointingHandCursor)
         btn_export_pdf.setToolTip(
             "Genera un documento PDF formal que incluye:<br>"
@@ -3073,6 +3115,8 @@ class MainWindow(QMainWindow):
         # Botón Abrir Carpeta
         btn_folder = QPushButton("Abrir Carpeta de Resultados")
         btn_folder.setProperty("class", "info")
+        btn_folder.style().unpolish(btn_folder) 
+        btn_folder.style().polish(btn_folder)
         btn_folder.setCursor(Qt.PointingHandCursor)
         btn_folder.setToolTip(
             "Abre el explorador de Windows en la carpeta<br>"
@@ -4149,6 +4193,8 @@ class MainWindow(QMainWindow):
         # Botón de Re-conexión
         btn_reconnect = QPushButton("Reconectar Cámaras")
         btn_reconnect.setProperty("class", "info")
+        btn_reconnect.style().unpolish(btn_reconnect) 
+        btn_reconnect.style().polish(btn_reconnect)
         btn_reconnect.setToolTip("Reconectar las cámaras.")
         btn_reconnect.clicked.connect(self.reconnect_cameras)
         eng_layout.addWidget(btn_reconnect, 5, 0, 1, 4)
@@ -4212,6 +4258,8 @@ class MainWindow(QMainWindow):
         
         btn_default = QPushButton("Restaurar Fábrica")
         btn_default.setProperty("class", "warning")
+        btn_default.style().unpolish(btn_default)
+        btn_default.style().polish(btn_default)
         btn_default.setCursor(Qt.PointingHandCursor)
         btn_default.setToolTip("Carga los valores de escala predeterminados.")
         btn_default.clicked.connect(self.load_default_calibration)
@@ -4219,19 +4267,23 @@ class MainWindow(QMainWindow):
         
         btn_apply_manual = QPushButton("Aplicar Escalas")
         btn_apply_manual.setProperty("class", "success")
+        btn_apply_manual.style().unpolish(btn_apply_manual) 
+        btn_apply_manual.style().polish(btn_apply_manual)
         btn_apply_manual.setCursor(Qt.PointingHandCursor)
         btn_apply_manual.setToolTip("Aplica estos valores de escala inmediatamente.")
         btn_apply_manual.clicked.connect(self.apply_manual_calibration)
         calib_btn_layout.addWidget(btn_apply_manual, 4.5)
         
-        btn_extra = QPushButton("Calibrar")
-        btn_extra.setProperty("class", "empty")   #arreglar   info
-        btn_extra.setCursor(Qt.PointingHandCursor)
-        btn_extra.setToolTip("SOON...")
-        #btn_extra.setToolTip("Abre la aplicación de calibración de escalas.")
-        btn_extra.clicked.connect(self.open_live_calibration)
-        calib_btn_layout.addWidget(btn_extra, 0.5)
-        btn_extra.setEnabled(False) #arreglar
+        btn_calibraty = QPushButton("Calibrar")
+        btn_calibraty.setProperty("class", "empty")   #arreglar   info
+        btn_calibraty.style().unpolish(btn_calibraty) 
+        btn_calibraty.style().polish(btn_calibraty)
+        btn_calibraty.setCursor(Qt.PointingHandCursor)
+        btn_calibraty.setToolTip("SOON...")
+        #btn_calibraty.setToolTip("Abre la aplicación de calibración de escalas.")
+        btn_calibraty.clicked.connect(self.open_live_calibration)
+        calib_btn_layout.addWidget(btn_calibraty, 0.5)
+        btn_calibraty.setEnabled(False) #arreglar
         
         manual_layout.addLayout(calib_btn_layout, 3, 0, 1, 3) 
         
@@ -4359,12 +4411,11 @@ class MainWindow(QMainWindow):
         # Botón de Calibración Unificado
         btn_fine_tune = QPushButton("Abrir Calibrador de Color en Vivo")
         btn_fine_tune.setProperty("class", "info")
+        btn_fine_tune.style().unpolish(btn_fine_tune)
+        btn_fine_tune.style().polish(btn_fine_tune)
         btn_fine_tune.setCursor(Qt.PointingHandCursor)
         btn_fine_tune.clicked.connect(self.open_fine_tune_calibration)
         chroma_layout.addWidget(btn_fine_tune)
-        
-        btn_fine_tune.style().unpolish(btn_fine_tune)
-        btn_fine_tune.style().polish(btn_fine_tune)
 
         layout.addWidget(chroma_group)
 
@@ -4373,12 +4424,12 @@ class MainWindow(QMainWindow):
         # ---------------------------------------------
         btn_save_config = QPushButton("Guardar Configuración")
         btn_save_config.setProperty("class", "primary")
+        btn_save_config.style().unpolish(btn_save_config)
+        btn_save_config.style().polish(btn_save_config)
         btn_save_config.setCursor(Qt.PointingHandCursor)
         btn_save_config.clicked.connect(self.save_config)
         btn_save_config.setToolTip("Guarda todos los cambios actuales en el archivo de configuración.")
         layout.addWidget(btn_save_config)
-        btn_save_config.style().unpolish(btn_save_config)
-        btn_save_config.style().polish(btn_save_config)
 
         for w in (self.combo_theme, self.combo_font_size, self.combo_density):
             w.currentTextChanged.connect(self.apply_appearance)
