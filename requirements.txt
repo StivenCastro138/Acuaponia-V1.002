@@ -21,8 +21,7 @@ matplotlib>=3.8
 reportlab>=4.0
 
 # --- Theming ---
-pyqtdarktheme>=2.1
-darkdetect>=0.8
+pyqtdarktheme==1.2.1
 darkdetect>=0.8
 
 # --- Web / Mobile ---
