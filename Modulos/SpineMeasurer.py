@@ -1,0 +1,161 @@
+import cv2
+import numpy as np
+import logging
+import networkx as nx
+from scipy.interpolate import splprep, splev
+from typing import Tuple, Optional
+
+from Config.Config import Config
+
+logger = logging.getLogger(__name__)
+
+class SpineMeasurer:
+    """
+    Motor de medición biométrica de alta precisión basado en análisis topológico (Grafos + Splines).
+    """
+
+    @staticmethod
+    def get_spine_info(mask_uint8: np.ndarray) -> Tuple[float, Optional[np.ndarray]]:
+        """
+        Calcula la longitud (px) y devuelve la visualización del esqueleto.
+        """
+        if mask_uint8 is None or cv2.countNonZero(mask_uint8) < 100:
+            return 0.0, None
+
+        # 1. Pre-procesamiento
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        binary = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=1)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        # 2. Esqueletización
+        try:
+            skeleton = cv2.ximgproc.thinning(binary, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN)
+        except AttributeError:
+            skeleton = SpineMeasurer._skeletonize_fallback(binary)
+        except Exception as e:
+            logger.error("Error en esqueletizacion", exc_info=True)
+            return 0.0, None
+
+        # 3. Análisis de Grafo 
+        ordered_points_yx = SpineMeasurer._get_longest_path_graph(skeleton)
+        
+        if ordered_points_yx is None:
+            logger.warning("No se pudo extraer un camino valido del esqueleto.")
+            return 0.0, skeleton
+
+        # 4. Medición Sub-píxel con Splines
+        length_px = SpineMeasurer._calculate_spline_length(ordered_points_yx)
+        
+        return length_px, skeleton
+
+    @staticmethod
+    def _get_longest_path_graph(skeleton: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Convierte esqueleto a grafo y busca el diámetro (camino más largo).
+        """
+        ys, xs = np.where(skeleton > 0)
+        pixels = np.column_stack((ys, xs))
+        
+        if len(pixels) < Config.MIN_SKELETON_PIXELS:
+            return None
+
+        G = nx.Graph()
+        pixel_set = set(map(tuple, pixels))
+        
+        for y, x in pixels:
+            G.add_node((y, x))
+            neighbors = [
+                (y, x+1), (y+1, x-1), (y+1, x), (y+1, x+1)
+            ]
+            for ny, nx_coord in neighbors:
+                if (ny, nx_coord) in pixel_set:
+                    dist = np.sqrt((ny-y)**2 + (nx_coord-x)**2) 
+                    G.add_edge((y, x), (ny, nx_coord), weight=dist)
+
+        if not nx.is_connected(G):
+            largest_cc = max(nx.connected_components(G), key=len)
+            G = G.subgraph(largest_cc).copy()
+
+        if G.number_of_nodes() < Config.MIN_SKELETON_PIXELS:
+            return None
+
+        endpoints = [node for node, degree in G.degree() if degree == 1]
+
+        if not endpoints:
+            endpoints = [list(G.nodes())[0]]
+        
+        try:
+            # 1. BFS desde nodo arbitrario para hallar u 
+            start_node = endpoints[0] if endpoints else list(G.nodes())[0]
+            lengths_from_start = nx.single_source_dijkstra_path_length(G, start_node)
+            u = max(lengths_from_start, key=lengths_from_start.get)
+            
+            # 2. BFS desde u para hallar v 
+            lengths_from_u = nx.single_source_dijkstra_path_length(G, u)
+            v = max(lengths_from_u, key=lengths_from_u.get)
+            
+            # 3. Recuperar el camino
+            best_path = nx.shortest_path(G, u, v, weight='weight')
+            
+        except Exception as e:
+            logger.error("Error en busqueda de camino grafo", exc_info=True)
+            return None
+
+        return np.array(best_path)
+
+    @staticmethod
+    def _calculate_spline_length(points_yx: np.ndarray) -> float:
+        """
+        Ajusta spline a los puntos ordenados para medición sub-píxel.
+        """
+        if len(points_yx) < 5:
+            diffs = np.diff(points_yx, axis=0)
+            return float(np.sum(np.sqrt(np.sum(diffs**2, axis=1))))
+
+        try:
+            y = points_yx[:, 0]
+            x = points_yx[:, 1]
+            
+            keep = np.ones(len(x), dtype=bool)
+            for i in range(1, len(x)):
+                if x[i] == x[i-1] and y[i] == y[i-1]:
+                    keep[i] = False
+            
+            if np.sum(keep) < 4: return 0.0
+            
+            x = x[keep]
+            y = y[keep]
+
+            smoothing = len(x) * 2.0 
+            tck, u = splprep([y, x], s=smoothing, k=3) 
+            
+            u_fine = np.linspace(0, 1, len(x) * 10) 
+            new_points = splev(u_fine, tck)
+            new_y, new_x = new_points[0], new_points[1]
+            
+            diffs = np.sqrt(np.diff(new_x)**2 + np.diff(new_y)**2)
+            length = np.sum(diffs)
+            
+            return float(length)
+
+        except Exception as e:
+            logger.info("Fallo spline, usando distancia euclidiana", exc_info=True)
+            diffs = np.diff(points_yx, axis=0)
+            return float(np.sum(np.sqrt(np.sum(diffs**2, axis=1))))
+
+    @staticmethod
+    def _skeletonize_fallback(img: np.ndarray) -> np.ndarray:
+        """Fallback lento usando morfología estándar."""
+        skel = np.zeros(img.shape, np.uint8)
+        element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+        temp = img.copy()
+        
+        while True:
+            eroded = cv2.erode(temp, element)
+            temp_open = cv2.dilate(eroded, element)
+            temp_sub = cv2.subtract(temp, temp_open)
+            skel = cv2.bitwise_or(skel, temp_sub)
+            temp = eroded.copy()
+            if cv2.countNonZero(temp) == 0:
+                break
+        return skel
