@@ -13,6 +13,7 @@ ultralytics>=8.0
 # --- Scientific / Math ---
 scipy>=1.11
 networkx>=3.2
+moondream>=0.1.3
 
 # --- Visualization ---
 matplotlib>=3.8
