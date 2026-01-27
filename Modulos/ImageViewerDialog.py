@@ -390,9 +390,10 @@ class ImageViewerDialog(QDialog):
             """
 
             if errores:
-                bg = self.report_style.get('anomaly_bg', '#ffebee')
-                border = self.report_style.get('anomaly_border', 'red')
-                text = self.report_style.get('text', '#000000')
+                style = self.report_style if self.report_style else {}
+                bg = style.get('anomaly_bg', '#ffebee')
+                border = style.get('anomaly_border', 'red')
+                text = style.get('text', '#000000')
 
                 reporte_html += f"""
                 <br><br>

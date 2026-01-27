@@ -108,7 +108,7 @@ class MainWindow(QMainWindow):
         self.current_tab = 1          
 
         # INICIALIZAR UI
-
+        self.setWindowIcon(QIcon("logo.ico"))
         self.load_config()
         self.init_ui()
         self.sync_ui_with_config()
