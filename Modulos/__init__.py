@@ -16,7 +16,6 @@ from .SegmentationRefiner import SegmentationRefiner
 from .SpineMeasurer import SpineMeasurer
 from .BiometryService import BiometryService
 from .OptimizedCamera import OptimizedCamera
-from .ClickableLabel import ClickableLabel
 
 __all__ = [
     'StatusBar',
@@ -36,6 +35,5 @@ __all__ = [
     'SegmentationRefiner',
     'SpineMeasurer',
     'BiometryService',
-    'OptimizedCamera',
-    'ClickableLabel'
+    'OptimizedCamera'
 ]

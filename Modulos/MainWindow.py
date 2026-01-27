@@ -1,37 +1,54 @@
-import cv2
+import os
+import time
+import json
+import csv
+import re
+import shutil
+import threading
+import logging
+import platform
+import subprocess
+import urllib.request
+from datetime import datetime
 import numpy as np
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QGridLayout, QSpinBox, QDoubleSpinBox,
-    QGroupBox, QTextEdit, QProgressBar, QTabWidget, QComboBox,
-    QCheckBox, QFileDialog, QMessageBox, QDialog, QLineEdit,
-    QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea,
-    QListWidget, QListWidgetItem, QSplitter, QSizePolicy,
-    QDateEdit, QTimeEdit, QAbstractItemView, QStyle, QFrame, QInputDialog,QTabBar
-)
-from PySide6.QtCore import (QTimer, Qt, QCoreApplication, QDate, QTime, QSize)
-from PySide6.QtGui import (QImage, QPixmap, QIntValidator, QColor, QFont, QIcon)
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import cv2
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak 
-from reportlab.platypus import Image as PDFImage 
-from reportlab.lib.pagesizes import A4 
-from reportlab.lib import colors 
-from reportlab.lib.styles import getSampleStyleSheet
-import qdarktheme 
-import threading, qrcode
-import urllib.request
-import shutil
-import darkdetect 
-import time 
-import os
-import json
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from PySide6.QtCore import (
+    Qt, QTimer, QSize, QDate, QTime,
+    QPropertyAnimation, QEasingCurve, QAbstractAnimation
+)
+from PySide6.QtGui import (
+    QImage, QPixmap, QColor, QFont, QIcon, QIntValidator
+)
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget,
+    QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
+    QPushButton, QLabel, QTextEdit, QProgressBar,
+    QTabWidget, QTabBar, QGroupBox, QFrame,
+    QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox,
+    QFileDialog, QMessageBox, QDialog, QLineEdit,
+    QTableWidget, QTableWidgetItem, QHeaderView,
+    QScrollArea, QListWidget, QListWidgetItem,
+    QSizePolicy, QDateEdit, QTimeEdit,
+    QAbstractItemView, QStyle, QGraphicsOpacityEffect
+)
 import sqlite3
-from datetime import datetime
-import logging
-import csv
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer,
+    Image, PageBreak, Table, TableStyle
+)
+import qdarktheme
+import darkdetect
+import qrcode
+
 from BasedeDatos.DatabaseManager import DatabaseManager
+from BasedeDatos.DatabaseManager import MEASUREMENT_COLUMNS
 from Config.Config import Config
 from .FishDetector import FishDetector
 from .FishTracker import FishTracker
@@ -45,7 +62,6 @@ from Modulos.AdvancedDetector import AdvancedDetector
 from .FishAnatomyValidator import FishAnatomyValidator
 from .CaptureDecisionDialog import CaptureDecisionDialog
 from .OptimizedCamera import OptimizedCamera
-from .ClickableLabel import ClickableLabel
 from Herramientas.mobil import start_flask_server, mobile_capture_queue, get_local_ip
 
 logger = logging.getLogger(__name__)
@@ -79,7 +95,7 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Sistema Avanzado de Medición de Peces v1.3")
+        self.setWindowTitle("FishTrace v1.2b")
         self.setGeometry(100, 100, 1600, 1000)
             
         # CONFIGURACIÓN INICIAL DE LÓGICA 
@@ -333,7 +349,7 @@ class MainWindow(QMainWindow):
         Anima la barra de confianza usando QPropertyAnimation.
         Se adapta a la velocidad configurada.
         """
-        from PySide6.QtCore import QPropertyAnimation, QEasingCurve
+        
         
         if not hasattr(self, 'confidence_bar'):
             return
@@ -727,12 +743,13 @@ class MainWindow(QMainWindow):
         
         # VISORES DE VIDEO
         video_layout = QHBoxLayout()
+        self.lbl_left = QLabel() 
+        self.lbl_top = QLabel()
         
         # Cámara Lateral
         left_group = QGroupBox("Vista Lateral (Perfil)")
         left_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         left_layout = QVBoxLayout(left_group)
-        self.lbl_left = ClickableLabel()
         self.lbl_left.setMinimumSize(640, 360)
         self.lbl_left.setProperty("class", "video-lateral") 
         self.lbl_left.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -748,7 +765,6 @@ class MainWindow(QMainWindow):
         top_group = QGroupBox("Vista Cenital (Dorso)")
         top_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         top_layout = QVBoxLayout(top_group)
-        self.lbl_top = ClickableLabel()
         self.lbl_top.setMinimumSize(640, 360)
         self.lbl_top.setProperty("class", "video-cenital")
         self.lbl_top.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -936,8 +952,9 @@ class MainWindow(QMainWindow):
         # Vista previa
         preview_group = QGroupBox("Monitor de Captura")
         preview_layout = QHBoxLayout(preview_group)
+        self.lbl_manual_left = QLabel()  
+        self.lbl_manual_top = QLabel()
 
-        self.lbl_manual_left = ClickableLabel()
         self.lbl_manual_left.setText("Cámara Lateral")
         self.lbl_manual_left.setMinimumSize(580, 340)
         self.lbl_manual_left.setProperty("class", "video-lateral")
@@ -946,7 +963,6 @@ class MainWindow(QMainWindow):
         self.lbl_manual_left.pause_callback = self.toggle_camera_pause
         preview_layout.addWidget(self.lbl_manual_left)
 
-        self.lbl_manual_top = ClickableLabel()
         self.lbl_manual_top.setText("Cámara Cenital")
         self.lbl_manual_top.setMinimumSize(580, 340)
         self.lbl_manual_top.setProperty("class", "video-cenital")
@@ -2212,7 +2228,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "⚠️ ID Largo", "El ID no puede superar los 50 caracteres.")
             return
         
-        import re
+
         if not re.match(r'^[a-zA-Z0-9_-]+$', fish_id):
             QMessageBox.warning(self, "⚠️ ID Inválido", "Solo letras, números, guiones y guiones bajos.")
             return
@@ -3130,8 +3146,7 @@ class MainWindow(QMainWindow):
     
     def open_output_folder(self):
         """Abre la carpeta de resultados en el explorador del sistema"""
-        import platform
-        import subprocess
+
         
         path = os.path.abspath(Config.OUT_DIR)
         if not os.path.exists(path):
@@ -3246,13 +3261,7 @@ class MainWindow(QMainWindow):
             return
         
         try:
-            import matplotlib.pyplot as plt
-            import matplotlib.dates as mdates
-            import numpy as np
-            from datetime import datetime
-            import os
-            import sqlite3
-            from BasedeDatos.DatabaseManager import MEASUREMENT_COLUMNS
+
             
             # --- RESET TOTAL DE ESTILOS ---
             plt.close('all')
@@ -3469,8 +3478,7 @@ class MainWindow(QMainWindow):
         Aplica efecto visual de "pulso" a botones importantes.
         Compatible con PyQt/PySide - NO usa CSS3.
         """
-        from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QSequentialAnimationGroup, QParallelAnimationGroup
-        from PySide6.QtWidgets import QGraphicsOpacityEffect
+
         
         # Lista de botones críticos
         critical_buttons = []
@@ -3546,8 +3554,7 @@ class MainWindow(QMainWindow):
         """
         Efectos visuales en widgets especiales (tabs, progress bars, etc.)
         """
-        from PySide6.QtCore import QPropertyAnimation, QEasingCurve
-        from PySide6.QtWidgets import QGraphicsOpacityEffect
+
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # ANIMACIÓN 1: Fade entre pestañas
@@ -4005,7 +4012,7 @@ class MainWindow(QMainWindow):
         if not enabled:
             return  # Si están desactivadas, no hacemos nada
         
-        from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QAbstractAnimation
+        
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # ANIMACIÓN 1: Botones principales (Feedback visual al hacer clic)
@@ -4271,17 +4278,6 @@ class MainWindow(QMainWindow):
         btn_apply_manual.clicked.connect(self.apply_manual_calibration)
         calib_btn_layout.addWidget(btn_apply_manual, 4.5)
         
-        btn_calibraty = QPushButton("Calibrar")
-        btn_calibraty.setProperty("class", "empty")   #arreglar   info
-        btn_calibraty.style().unpolish(btn_calibraty) 
-        btn_calibraty.style().polish(btn_calibraty)
-        btn_calibraty.setCursor(Qt.PointingHandCursor)
-        btn_calibraty.setToolTip("SOON...")
-        #btn_calibraty.setToolTip("Abre la aplicación de calibración de escalas.")
-        btn_calibraty.clicked.connect(self.open_live_calibration)
-        calib_btn_layout.addWidget(btn_calibraty, 0.5)
-        btn_calibraty.setEnabled(False) #arreglar
-        
         manual_layout.addLayout(calib_btn_layout, 3, 0, 1, 3) 
         
         layout.addWidget(manual_group)
@@ -4450,62 +4446,7 @@ class MainWindow(QMainWindow):
         sb.setRange(0.000001, 1.0)
         sb.setSingleStep(0.0001)
         return sb
-    
-    def open_live_calibration(self):
-        from Herramientas.ScaleMedition import CalibradorEscalaVivo
 
-        opciones = [
-            "Cámara Lateral - Frente",
-            "Cámara Lateral - Fondo",
-            "Cámara Cenital - Frente",
-            "Cámara Cenital - Fondo"
-        ]
-
-        seleccion, ok = QInputDialog.getItem(
-            self, "Seleccionar Calibración",
-            "¿Qué plano desea calibrar ahora?",
-            opciones, 0, False
-        )
-        if not ok:
-            return
-
-        if "Lateral" in seleccion:
-            cam_index = self.spin_cam_left.value()
-            target_spin = self.spin_scale_front_left if "Frente" in seleccion else self.spin_scale_back_left
-        else:
-            cam_index = self.spin_cam_top.value()
-            target_spin = self.spin_scale_front_top if "Frente" in seleccion else self.spin_scale_back_top
-
-        try:
-            self.status_bar.set_status(f"📏 Calibrando {seleccion}...", "info")
-
-            calibrador = CalibradorEscalaVivo(camara_index=cam_index)
-            escala = calibrador.calibrar_en_vivo(
-                camara_index=cam_index,
-                cm_reales=10.0
-            )
-
-            if escala is None:
-                self.status_bar.set_status("⚠️ Calibración cancelada", "warning")
-                return
-
-            target_spin.setValue(escala)
-            target_spin.setProperty("state", "success")
-            target_spin.style().polish(target_spin)
-
-            QMessageBox.information(
-                self, "Calibración Exitosa",
-                f"{seleccion}\nNueva escala: {escala:.6f} cm/px"
-            )
-
-        except Exception as e:
-            logger.exception("Error en calibración en vivo")
-            QMessageBox.critical(
-                self, "Error de Hardware",
-                f"No se pudo acceder a la cámara {cam_index}"
-            )
-
-    
     def load_default_calibration(self):
         """Carga los valores de calibración predeterminados de fábrica"""
 
@@ -4959,11 +4900,7 @@ class MainWindow(QMainWindow):
             return
         
         try:
-            import matplotlib.pyplot as plt
-            import matplotlib.dates as mdates
-            import numpy as np
-            from BasedeDatos.DatabaseManager import MEASUREMENT_COLUMNS
-            
+           
             # --- CORRECCIÓN DE ESTILO ---
             # Forzamos estilo 'default' o 'seaborn' para que el PNG salga con fondo blanco
             # ideal para documentos, independiente de si la app está en modo oscuro.
@@ -5115,7 +5052,6 @@ class MainWindow(QMainWindow):
         """
         # 1. Preparar ruta de guardado
         try:
-            from Config import Config
             report_dir = getattr(Config, 'CSV_DIR', os.path.join("Resultados", "CSV"))
         except:
             report_dir = os.path.join("Resultados", "CSV")
@@ -5132,8 +5068,6 @@ class MainWindow(QMainWindow):
         
         conn = None
         try:
-            import csv
-            import sqlite3
             
             # 2. CONEXIÓN DIRECTA A LA BASE DE DATOS
             conn = sqlite3.connect(self.db.db_path)
@@ -5225,7 +5159,6 @@ class MainWindow(QMainWindow):
         """
         # 1. Configurar directorio de reportes (ANTES del diálogo)
         try:
-            from Config import Config
             report_dir = getattr(Config, 'REPORTS_DIR', os.path.join("Resultados", "Reportes"))
         except:
             report_dir = os.path.join("Resultados", "Reportes")
@@ -5253,14 +5186,6 @@ class MainWindow(QMainWindow):
         os.makedirs(temp_plots_dir, exist_ok=True)
 
         try:
-            import matplotlib.pyplot as plt
-            import numpy as np
-            from reportlab.lib.pagesizes import A4
-            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak, Table, TableStyle
-            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-            from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
-            from reportlab.lib import colors
-            from BasedeDatos.DatabaseManager import MEASUREMENT_COLUMNS
                         
             # --- MAPEO SEGURO DE DATOS ---
             col_map = {col: i for i, col in enumerate(MEASUREMENT_COLUMNS)}
@@ -5449,7 +5374,6 @@ class MainWindow(QMainWindow):
             
             # 6. Limpiar archivos temporales DESPUÉS de generar el PDF
             try:
-                import shutil
                 shutil.rmtree(temp_plots_dir)
             except: 
                 pass
@@ -5475,7 +5399,6 @@ class MainWindow(QMainWindow):
         finally:
             # Asegurar limpieza incluso si hay errores
             try:
-                import shutil
                 if os.path.exists(temp_plots_dir):
                     shutil.rmtree(temp_plots_dir)
             except:

@@ -1,18 +1,28 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Servicio de Lógica Biométrica (BiometryService.py)
+DESCRIPCIÓN: Controlador principal de la lógica de negocio. Orquestador que coordina:
+             1. La detección por IA (AdvancedDetector).
+             2. La conversión fotogramétrica (Píxeles -> Centímetros).
+             3. La estimación volumétrica y de peso.
+             4. La validación de calidad de los datos (QA/QC).
+"""
+
 import cv2
 import logging
 import numpy as np
 from typing import Optional, Tuple, Dict
 
+from Config.Config import Config
 from .MorphometricAnalyzer import MorphometricAnalyzer
 from .MeasurementValidator import MeasurementValidator
-from Config.Config import Config
-
 
 logger = logging.getLogger(__name__)
 
 class BiometryService:
     """
-    Orquestador de lógica biométrica.
+    Fachada que simplifica el proceso de medición para la interfaz gráfica.
+    Encapsula toda la complejidad del análisis de estereovisión.
     """
 
     def __init__(self, advanced_detector):
@@ -30,34 +40,37 @@ class BiometryService:
         draw_skeleton: bool = True
     ) -> Tuple[Optional[Dict[str, float]], np.ndarray, np.ndarray]:
         """
-        Analiza par estéreo de imágenes y retorna métricas + imágenes anotadas.
+        Flujo Maestro de Análisis Biométrico.
+        
+        Realiza el análisis simultáneo de vistas lateral y cenital, fusiona los datos
+        geométricos y genera las visualizaciones para el usuario.
         """
         
         if img_lat is None or img_top is None:
-            logger.error("BiometryService: Imagenes de entrada son None")
+            logger.error("Imagenes de entrada son None.")
             return None, img_lat, img_top
 
         if not self._is_detector_ready():
-            logger.error("BiometryService: Detector IA no listo o no asignado.")
+            logger.error("Detector IA no listo o no asignado.")
             return None, img_lat, img_top
 
         try:
             # ============================================================
-            # 1. ANÁLISIS DE IMÁGENES (IA)
+            # FASE 1: DETECCIÓN Y SEGMENTACIÓN (Deep Learning)
             # ============================================================
             res_lat = self.detector.analyze_frame(img_lat)
             res_top = self.detector.analyze_frame(img_top)
 
             if not res_lat or not res_lat.bbox:
-                logger.warning("BiometryService: No se detecto pez en vista lateral.")
+                logger.warning("No se detecto pez en vista lateral.")
                 return None, img_lat, img_top
 
             has_top = res_top and res_top.bbox is not None
             if not has_top:
-                logger.warning("BiometryService: No se detecto pez en vista cenital. Se limitara el calculo.")
+                logger.warning("No se detecto pez en vista cenital. Se limitara el calculo.")
 
             # ============================================================
-            # 2. CÁLCULO DE FACTORES DE ESCALA 
+            # FASE 2: FOTOGRAMETRÍA (Cálculo de Escalas Dinámicas)
             # ============================================================
             y_center_lat = (res_lat.bbox[1] + res_lat.bbox[3]) / 2
             px_to_cm_lat = Config.calcular_escala_proporcional(
@@ -111,11 +124,11 @@ class BiometryService:
                 metrics.update(derived)
 
             # ============================================================
-            # 5. VALIDACIÓN DE REGLAS DE NEGOCIO
+            # 5. VALIDACIÓN 
             # ============================================================
             warnings = MeasurementValidator.validate_measurement(metrics)
             if warnings:
-                logger.info(f"Validacion biometrica warnings: {warnings}")
+                logger.info(f"Validacion biometrica warnings: {warnings}.")
                 metrics['_warnings'] = warnings
 
             # ============================================================
@@ -130,12 +143,13 @@ class BiometryService:
             return metrics, img_lat_ann, img_top_ann
 
         except Exception as e:
-            logger.error(f"Error critico en BiometryService: {e}", exc_info=True)
+            logger.error(f"Error critico: {e}", exc_info=True)
             return None, img_lat, img_top
 
     def _draw_result(self, image: np.ndarray, result, color: Tuple[int,int,int], label: str, show_box: bool, show_skel: bool) -> np.ndarray:
         """
-        Dibuja los resultados encapsulados en BiometryResult sobre la imagen.
+        Motor de renderizado para visualización de datos en pantalla (On-Screen Display).
+        Dibuja cajas, textos y morfología sobre la imagen original.
         """
         if result is None or image is None: 
             return image

@@ -1,48 +1,58 @@
-from math import e
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Punto de Entrada Principal (app.py)
+DESCRIPCIÓN: Inicializa el entorno, verifica dependencias de IA y lanza la 
+             interfaz gráfica de usuario (GUI).
+"""
+
 import cv2
-from PySide6.QtWidgets import QApplication
 import os
 import logging
+from PySide6.QtWidgets import QApplication
+
 from Config.Config import Config
 from Modulos.MainWindow import MainWindow
 
 logger = logging.getLogger(__name__)
 
-PYTORCH_AVAILABLE = False
-PYTORCH_ERROR_MESSAGE = None
-
-try:
-    PYTORCH_AVAILABLE = True
-    print("✅ Usando modelos pre-entrenados (YOLOv8/DeepLab)")
-except:
-    PYTORCH_ERROR_MESSAGE = str(e)
-    PYTORCH_AVAILABLE = False
-    print(f"⚠️ PyTorch no disponible: {PYTORCH_ERROR_MESSAGE}")
-    logger.warning(f"PyTorch no disponible - Usando Chroma Key: {PYTORCH_ERROR_MESSAGE}")
-
 # ============================================================================
-# FUNCIÓN PRINCIPAL
+# PROCEDIMIENTO PRINCIPAL (MAIN)
 # ============================================================================
 def main():
-    os.makedirs(Config.OUT_DIR, exist_ok=True)
-    os.makedirs(Config.IMAGES_AUTO_DIR, exist_ok=True)
-    os.makedirs(Config.IMAGES_MANUAL_DIR, exist_ok=True)
-    os.makedirs(Config.REPORTS_DIR, exist_ok=True)
-    os.makedirs(Config.CSV_DIR, exist_ok=True)
-    os.makedirs(Config.GRAPHS_DIR, exist_ok=True)
+    """
+    Inicializa los directorios del sistema, configura el estilo de la 
+    aplicación y lanza la ventana principal.
+    """
     
+    # 1. Creación de la estructura de carpetas necesaria para la persistencia de datos
+    folders = [
+        Config.OUT_DIR, 
+        Config.IMAGES_AUTO_DIR, 
+        Config.IMAGES_MANUAL_DIR, 
+        Config.REPORTS_DIR, 
+        Config.CSV_DIR, 
+        Config.GRAPHS_DIR
+    ]
+    
+    for folder in folders:
+        os.makedirs(folder, exist_ok=True)
+    
+    # 2. Inicialización de la aplicación
     app = QApplication([])
-    
     app.setStyle('Fusion')
     
+    # 3. Lanzamiento de la interfaz de usuario
     window = MainWindow()
     window.show()
     
-    logger.info("Aplicacion Iniciada")
+    logger.info("Sistema FishTrace iniciado correctamente.")
     
-    app.exec()
+    # 4. Ciclo de eventos de la aplicación
+    exit_code = app.exec()
     
+    # 5. Limpieza de recursos al cerrar
     cv2.destroyAllWindows()
+    return exit_code
 
 if __name__ == "__main__":
     main()

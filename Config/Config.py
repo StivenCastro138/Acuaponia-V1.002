@@ -1,17 +1,16 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Configuración Centralizada (Config.py)
+DESCRIPCIÓN: Define las constantes globales, parámetros de hardware, 
+             modelos biológicos y calibración geométrica para el sistema.
+"""
+
 import os
 import logging
-
 
 class Config:
     """
     Configuración centralizada del sistema de medición automática de truchas.
-
-    Este módulo define:
-    - Parámetros de cámaras y captura
-    - Constantes de calibración geométrica
-    - Parámetros biológicos y modelos de estimación
-    - Umbrales de validación y control de calidad
-    - Rutas de almacenamiento y logging
     """
 
     # ==========================================================================
@@ -20,8 +19,8 @@ class Config:
 
     # Clave de acceso a la API de MoonDream (cargada desde variables de entorno)
     MOONDREAM_API_KEY = os.getenv("MOONDREAM_API_KEY")
-    # Windows (PowerShell):
-    # [System.Environment]::SetEnvironmentVariable("MOONDREAM_API_KEY", "TU_CLAVE_AQUI", "User")
+    # Windows (PowerShell como Administrador):
+    # [System.Environment]::SetEnvironmentVariable("MOONDREAM_API_KEY", "TU_CLAVE_AQUI", "Machine")
 
     # ==========================================================================
     # CONFIGURACIÓN DE CÁMARAS
@@ -68,6 +67,34 @@ class Config:
     HSV_S_MAX = 255
     HSV_V_MIN = 40
     HSV_V_MAX = 255
+    
+    # ==========================================================================
+    # PARÁMETROS MORFOLÓGICOS (FORMA)
+    # ==========================================================================
+
+    MIN_ASPECT_RATIO = 2.5
+    MAX_ASPECT_RATIO = 7.0
+
+    MIN_SOLIDITY = 0.75
+    MAX_SOLIDITY = 0.97
+
+    MIN_SYMMETRY = 0.70
+    MIN_TAPER_RATIO = 1.05
+
+    # ==========================================================================
+    # RANGOS MORFOMÉTRICOS
+    # ==========================================================================
+
+    MIN_LENGTH_CM = 4.0
+    MAX_LENGTH_CM = 50.0
+
+    MIN_HEIGHT_RATIO = 0.14
+    MAX_HEIGHT_RATIO = 0.35
+
+    DEFAULT_WIDTH_RATIO = 0.18
+    MAX_WIDTH_RATIO_ADULT = 0.22
+
+    ALEVIN_THRESHOLD_CM = 15.0
 
     # ==========================================================================
     # PARÁMETROS BIOLÓGICOS
@@ -82,21 +109,6 @@ class Config:
     # Relación alométrica Peso–Longitud: W = K * L^b
     WEIGHT_K = 0.0139
     WEIGHT_EXP = 3.02
-
-    # ==========================================================================
-    # PROPORCIONES ANATÓMICAS
-    # ==========================================================================
-
-    # Altura relativa respecto a la longitud total
-    MIN_HEIGHT_RATIO = 0.14
-    MAX_HEIGHT_RATIO = 0.35
-
-    # Ancho relativo
-    DEFAULT_WIDTH_RATIO = 0.18
-    MAX_WIDTH_RATIO_ADULT = 0.22
-
-    # Umbral de clasificación morfológica
-    ALEVIN_THRESHOLD_CM = 15.0   # Alevín vs adulto
 
     # ==========================================================================
     # VALIDACIÓN DE MEDICIONES
@@ -182,10 +194,7 @@ class Config:
     @classmethod
     def initialize(cls):
         """
-        Inicializa la configuración del sistema:
-        - Crea los directorios necesarios
-        - Configura el sistema de logging
-        - Verifica la disponibilidad de la API
+        Inicializa la configuración del sistema.
         """
         for path in cls.DIRS_TO_CREATE:
             os.makedirs(path, exist_ok=True)
@@ -201,7 +210,7 @@ class Config:
         cls.logger = logging.getLogger(__name__)
 
         cls.logger.info("=" * 70)
-        cls.logger.info("Sistema de Medición de Truchas - Inicializado")
+        cls.logger.info("Sistema de Medicion de Truchas - Inicializado")
         cls.logger.info("=" * 70)
 
         if not cls.MOONDREAM_API_KEY:

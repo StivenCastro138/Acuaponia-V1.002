@@ -1,3 +1,10 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Gestión de Persistencia (DatabaseManager.py)
+DESCRIPCIÓN: Administra la base de datos SQLite, manejando el ciclo de vida de los datos,
+             migraciones de esquema, índices de rendimiento y consultas biométricas.
+"""
+
 import sqlite3
 import os
 from datetime import datetime
@@ -6,7 +13,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# CONFIGURACIÓN DE COLUMNAS
+# ============================================================================
+# ESQUEMA DE DATOS Y DEFINICIÓN DE COLUMNAS
+# ============================================================================
 MEASUREMENT_COLUMNS = (
     'id', 'timestamp', 'fish_id', 
     'length_cm', 'height_cm', 'width_cm', 'weight_g',
@@ -24,57 +33,58 @@ MEASUREMENT_COLUMNS_STR = ', '.join(MEASUREMENT_COLUMNS)
 
 class DatabaseManager:
     """
-    Gestor centralizado de base de datos
+    Controlador central para operaciones CRUD y administración de SQLite.
     """
     
     def __init__(self, db_path: Optional[str] = None):
+        """
+        Inicializa el gestor y asegura la existencia del archivo de base de datos.
+        """
         if db_path is None:
             folder = "BasedeDatos"
             os.makedirs(folder, exist_ok=True)
-            db_path = os.path.join(folder, "Base de Datos.db")
+            db_path = os.path.join(folder, "database.db")
         
         self.db_path = db_path
         self._column_cache: Optional[Dict[str, int]] = None
         self.init_database()
     
+    # ========================================================================
     # INICIALIZACIÓN Y MIGRACIONES
+    # ========================================================================
     def init_database(self) -> None:
-        """Crea tablas e índices si no existen"""
+        """Crea la estructura relacional (tablas e índices) si no existe en el sistema.
+        Define tablas para: Mediciones, Calibraciones y Perfiles de Especies."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # ✅ TABLA MEASUREMENTS
+        # Tabla de mediciones biométricas y ambientales
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS measurements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
                 fish_id TEXT,
                 
-                -- Dimensiones IA
                 length_cm REAL,
                 height_cm REAL,
                 width_cm REAL,
                 weight_g REAL,
                 
-                -- Dimensiones Manuales
                 manual_length_cm REAL,
                 manual_height_cm REAL,
                 manual_width_cm REAL,
                 manual_weight_g REAL,
                 
-                -- Cálculos
                 lat_area_cm2 REAL,
                 top_area_cm2 REAL,
                 volume_cm3 REAL,
                 
-                -- Metadatos
                 confidence_score REAL,
                 notes TEXT,
                 image_path TEXT,
                 measurement_type TEXT DEFAULT 'manual',
                 validation_errors TEXT,
 
-                -- API
                 api_air_temp_c REAL,
                 api_water_temp_c REAL,
                 api_rel_humidity REAL,
@@ -86,24 +96,21 @@ class DatabaseManager:
             )
         ''')
         
-        # ✅ TABLA CALIBRATIONS
+        # Tabla de histórico de calibraciones de cámaras y visión
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS calibrations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
                 
-                -- ESCALAS 
                 scale_lat_front REAL NOT NULL,
                 scale_lat_back REAL NOT NULL,
                 scale_top_front REAL NOT NULL,
                 scale_top_back REAL NOT NULL,
                 
-                -- HSV CÁMARA LATERAL 
                 hsv_left_h_min INTEGER, hsv_left_h_max INTEGER,
                 hsv_left_s_min INTEGER, hsv_left_s_max INTEGER,
                 hsv_left_v_min INTEGER, hsv_left_v_max INTEGER,
                 
-                -- HSV CÁMARA CENITAL 
                 hsv_top_h_min INTEGER, hsv_top_h_max INTEGER,
                 hsv_top_s_min INTEGER, hsv_top_s_max INTEGER,
                 hsv_top_v_min INTEGER, hsv_top_v_max INTEGER,
@@ -112,7 +119,7 @@ class DatabaseManager:
             )
         ''')
         
-        # ✅ TABLA SPECIES_PROFILES
+        # Tabla de perfiles de especies
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS species_profiles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -137,7 +144,8 @@ class DatabaseManager:
     
     def migrate_database(self, cursor: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
         """
-        Agrega columnas faltantes a measurements y calibrations sin romper datos existentes.
+        Gestiona la evolución del esquema de datos. Agrega nuevas columnas
+        a bases de datos existentes sin afectar la integridad de registros previos.
         """
         new_columns_meas = {
             'height_cm': 'REAL',
@@ -176,7 +184,7 @@ class DatabaseManager:
         self._column_cache = None
 
     def _create_indexes(self, cursor: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
-        """Crea índices para acelerar búsquedas frecuentes."""
+        """Optimiza la velocidad de respuesta para consultas de filtrado y ordenamiento."""
         indexes = [
             "CREATE INDEX IF NOT EXISTS idx_timestamp ON measurements(timestamp DESC)",
             "CREATE INDEX IF NOT EXISTS idx_fish_id ON measurements(fish_id)",
@@ -189,13 +197,14 @@ class DatabaseManager:
                 pass
         conn.commit()
     
-    # OPERACIONES CRUD 
+    # ========================================================================
+    # OPERACIONES DE PERSISTENCIA (CRUD)
+    # ========================================================================
     def save_measurement(self, data: Dict[str, Any]) -> int:
-        """Guarda una medición en la base de datos."""
+        """Registra una nueva medición biométrica."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Mapeo de seguridad para areas 
         lat_area = data.get('lat_area_cm2', data.get('area_cm2', 0))
         top_area = data.get('top_area_cm2', 0)
         
@@ -259,7 +268,7 @@ class DatabaseManager:
                 row = cursor.fetchone()
                 return dict(row) if row else None
         except Exception as e:
-            logger.error(f"Error al obtener diccionario de medición: {e}")
+            logger.error(f"Error al obtener diccionario de medicion: {e}")
             return None
     
     def get_measurement_by_id(self, measurement_id: int) -> Optional[Tuple]:
@@ -341,12 +350,7 @@ class DatabaseManager:
         return affected_rows > 0
     
     def execute_query(self, query: str, parameters: tuple = (), fetchone: bool = False, fetchall: bool = False) -> Any:
-        """
-        Ejecuta una consulta SQL.
-        - Si fetchone=True: Retorna un solo registro (o None).
-        - Si fetchall=True: Retorna una lista de registros.
-        - Si no: Ejecuta commit y retorna True si fue exitoso, False si falló.
-        """
+        """Ejecuta una consulta SQL"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
@@ -361,7 +365,6 @@ class DatabaseManager:
                 return True
         except Exception as e:
             logger.error(f"Error ejecutando query '{query}': {e}")
-            # Retorna None si se esperaban datos, o False si era una operación de escritura
             return None if (fetchone or fetchall) else False
         
     def get_image_path(self, measurement_id):
@@ -369,7 +372,9 @@ class DatabaseManager:
         result = self.execute_query(query, (measurement_id,), fetchone=True)
         return result[0] if result else None
     
-    # CONSULTAS FILTRADAS
+    # ========================================================================
+    # UTILIDADES DE ACCESO
+    # ========================================================================
     def get_filtered_measurements(
         self, 
         limit: Optional[int] = 100, 
@@ -435,7 +440,6 @@ class DatabaseManager:
     def get_field_value(self, measurement_row, column_name, default=None):
         """Recupera un valor de la tupla de forma segura usando el nombre de columna"""
         try:
-            # Si no tenemos el caché de columnas, lo creamos
             if not hasattr(self, '_column_cache') or not self._column_cache:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
@@ -450,7 +454,6 @@ class DatabaseManager:
         except:
             return default
         
-    # CALIBRACIONES 
     def save_calibration(self, scale_lat_front: float, scale_lat_back: float, 
                          scale_top_front: float, scale_top_back: float, 
                          hsv_left: Optional[Dict] = None, hsv_top: Optional[Dict] = None, 
@@ -508,7 +511,9 @@ class DatabaseManager:
             'timestamp': result[16]
         }
     
-   # HELPERS
+   # ========================================================================
+    # HELPERS
+    # ========================================================================
     def get_field_value(self, measurement_row: Any, field_name: str, default: Any = None) -> Any:
         """Extrae valores de forma robusta."""
         if not measurement_row: return default
@@ -526,16 +531,11 @@ class DatabaseManager:
         return default
     
     def _rebuild_column_cache(self) -> None:
-        """
-        Mapea los nombres de columnas a sus índices basándose en MEASUREMENT_COLUMNS.
-        CRUCIAL: Debe coincidir con el orden del SELECT en get_filtered_measurements.
-        """
+        """Mapea los nombres de columnas a sus índices."""
         try:
-            # CORRECCIÓN: Usamos la tupla de Python, NO 'PRAGMA table_info'
-            # Esto asegura que el índice coincida con lo que devuelve get_filtered_measurements
             self._column_cache = {col: i for i, col in enumerate(MEASUREMENT_COLUMNS)}
         except Exception as e:
-            logger.error(f"Error reconstruyendo caché de columnas: {e}")
+            logger.error(f"Error reconstruyendo cache de columnas: {e}")
             self._column_cache = {}
             
     def get_next_fish_number(self) -> int:

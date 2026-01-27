@@ -1,14 +1,25 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Procesador de Video Asíncrono (FrameProcessor.py)
+DESCRIPCIÓN: Implementa un hilo de ejecución independiente (Worker Thread) dedicado
+             al procesamiento intensivo de imágenes. Desacopla la lógica de visión
+             artificial (OpenCV/AI) del hilo de la interfaz gráfica (GUI Main Thread)
+             para mantener la aplicación fluida y responsiva.
+"""
+
 import cv2
 from PySide6.QtCore import QThread, Signal, QObject
 import time
 import queue
 import logging
 import numpy as np
+
+from Config.Config import Config
 from .FishDetector import FishDetector
-from .FishTracker import FishTracker
+from .FishTracker import FishTracker    
 from .SimpleMotionDetector import SimpleMotionDetector
 from .BiometryService import BiometryService
-from Config.Config import Config
+
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +44,6 @@ class FrameProcessor(QThread):
         self.chroma_detector = FishDetector() 
         self.tracker = FishTracker()
         self.motion_detector = SimpleMotionDetector(threshold=12)
-        
-        # Servicio de biometría
         self.biometry_service = BiometryService(moondream_detector_instance)
         
         self.processing = False
@@ -63,7 +72,7 @@ class FrameProcessor(QThread):
             self.queue.put((frame_left, frame_top, params))
             return True 
         except Exception as e:
-            logger.error(f"Error anadiendo frame a cola: {e}")
+            logger.error(f"Error anadiendo frame a cola: {e}.")
             return False 
 
     def run(self):
@@ -73,7 +82,6 @@ class FrameProcessor(QThread):
             try:
                 frame_left, frame_top, params = self.queue.get(timeout=0.1)
                 
-                # Verificar estabilidad
                 should_process = (
                     self.motion_detector.is_stable(frame_left) or 
                     self.capture_requested or
@@ -82,8 +90,6 @@ class FrameProcessor(QThread):
                 self.capture_requested = False 
 
                 if not should_process and not self.skip_validation:
-                    # --- OPTIMIZACIÓN PUNTO 3 (UI LAG) ---
-                    # Solo emitir señal a la UI cada 30 frames (aprox 1 seg) para no congelar la app
                     if self.frame_count % 30 == 0:
                         motion_level = self.motion_detector.get_motion_level()
                         self.signals.progress_update.emit(
@@ -110,22 +116,18 @@ class FrameProcessor(QThread):
             except queue.Empty: 
                 continue
             except Exception as e:
-                logger.error(f"Error en FrameProcessor loop: {str(e)}")
+                logger.error(f"Error en FrameProcessor loop: {str(e)}.")
                 self.result_ready.emit({})
 
     def process_frames(self, frame_left, frame_top, params):
         try:
             start_time = time.time()
             
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            # 1. ✅ EXTRACCIÓN DE PARÁMETROS (INCLUYE HSV INDEPENDIENTES)
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             scale_front_left = params.get('scale_front_left', 0.006666)
             scale_back_left = params.get('scale_back_left', 0.014926)
             scale_front_top = params.get('scale_front_top', 0.004348)
             scale_back_top = params.get('scale_back_top', 0.012582)
 
-            # ✅ NUEVO: Extraer valores HSV independientes
             hsv_left = {
                 'h_min': params.get('hue_left_min', 35),
                 'h_max': params.get('hue_left_max', 85),
@@ -144,14 +146,10 @@ class FrameProcessor(QThread):
                 'v_max': params.get('val_top_max', 255)
             }
 
-            # 2. VALIDACIÓN DE ESTABILIDAD
             is_stable = self.motion_detector.is_stable(frame_left)
             if not is_stable and not self.skip_validation and not Config.DEBUG_MODE:
                 return None
 
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            # 3. ✅ ANÁLISIS BIOMETRYSERVICE (Con parámetros HSV)
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             self.signals.progress_update.emit("🧠 Analizando con BiometryService...")
             ia_start = time.time()
             
@@ -171,7 +169,7 @@ class FrameProcessor(QThread):
                     cv2.imshow('DEBUG: Skeleton', img_lat_ann)
                     
             except Exception as e:
-                logger.error(f"Error en BiometryService: {e}")
+                logger.error(f"Error en BiometryService: {e}.")
                 self.signals.progress_update.emit(f"❌ Error en análisis: {str(e)}")
                 return None
             
@@ -188,22 +186,18 @@ class FrameProcessor(QThread):
             self.signals.roi_status.emit(True)
             self.signals.progress_update.emit("✅ Análisis completado.")
 
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            # 5. ✅ TRACKER (Ahora con HSV lateral específico)
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             contour_lat = self._retrieve_contour_for_tracker(frame_left, hsv_left)
+            contour_top = self._retrieve_contour_for_tracker(frame_top, hsv_top)
             
             self.tracker.update(contour_lat, metrics, timestamp=start_time)
 
-            # 6. CALCULAR CONFIANZA
             confidence = self._calculate_confidence(metrics, is_stable, ia_time_ms)
 
-            # 7. CONSTRUIR RESULTADO
             result = {
                 'frame_left': img_lat_ann if img_lat_ann is not None else frame_left,
                 'frame_top': img_top_ann if img_top_ann is not None else frame_top,
                 'contour_left': contour_lat,
-                'contour_top': None,
+                'contour_top': contour_top,
                 'metrics': metrics,
                 'smoothed_metrics': self.tracker.get_smoothed_measurement(),
                 'is_consistent': self.tracker.get_tracking_stats()['is_consistent'],
@@ -219,36 +213,32 @@ class FrameProcessor(QThread):
 
             logger.info(
                 f"Frame procesado: L={metrics['length_cm']:.1f}cm, "
-                f"Conf={confidence:.1%}, T={ia_time_ms:.0f}ms"
+                f"Conf={confidence:.1%}, T={ia_time_ms:.0f}ms."
             )
 
             return result
 
         except Exception as e:
-            logger.error(f"Error critico en process_frames: {str(e)}", exc_info=True)
+            logger.error(f"Error critico en process_frames: {str(e)}.", exc_info=True)
             self.signals.progress_update.emit(f"❌ Error: {str(e)}")
             return None
 
     def _retrieve_contour_for_tracker(self, clean_frame, hsv_params):
         """
-        ✅ VERSIÓN CORREGIDA: Acepta parámetros HSV específicos para la cámara
-        
-        Args:
-            clean_frame: Frame de la cámara
-            hsv_params: Dict con h_min, h_max, s_min, s_max, v_min, v_max
+        Acepta parámetros HSV específicos para la cámara
+
         """
         if clean_frame is None:
             return None
         
         try:
-            # ✅ Aplicar chroma key con valores HSV específicos de esta cámara
             lower = np.array([hsv_params['h_min'], hsv_params['s_min'], hsv_params['v_min']])
             upper = np.array([hsv_params['h_max'], hsv_params['s_max'], hsv_params['v_max']])
             
             # Convertir a HSV
             hsv = cv2.cvtColor(clean_frame, cv2.COLOR_BGR2HSV)
             
-            # Crear máscara del FONDO (verde)
+            # Crear máscara del FONDO 
             mask_background = cv2.inRange(hsv, lower, upper)
             
             # Invertir para obtener máscara del PEZ
@@ -273,7 +263,7 @@ class FrameProcessor(QThread):
             return max(valid, key=cv2.contourArea) if valid else None
 
         except Exception as e:
-            logger.debug(f"No se pudo extraer contorno para tracker: {e}")
+            logger.debug(f"No se pudo extraer contorno para tracker: {e}.")
             return None
 
     def _calculate_confidence(self, metrics, is_stable, ia_time_ms):
@@ -310,4 +300,4 @@ class FrameProcessor(QThread):
     def set_hsv_ranges(self, h_min, h_max, s_min, s_max, v_min, v_max):
         if hasattr(self.chroma_detector, 'set_hsv_ranges'):
             self.chroma_detector.set_hsv_ranges(h_min, h_max, s_min, s_max, v_min, v_max)
-            logger.info(f"HSV ranges updated")
+            logger.info(f"Rangos HSV actualizados.")
