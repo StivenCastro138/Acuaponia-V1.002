@@ -1497,6 +1497,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'db'):
              prefix = "QR" if is_mobile else "EXT"
              txt_id.setText(f"{prefix}_{self.db.get_next_fish_number()}")
+            
         txt_id.setPlaceholderText("Ej: TRUCHA-001")
         txt_id.setToolTip("Número identificador único para el pez.")
         
@@ -2688,6 +2689,8 @@ class MainWindow(QMainWindow):
         btn_search.setToolTip("Aplica los filtros de texto, tipo y fecha seleccionados.")
         btn_search.clicked.connect(self.reset_pagination_and_refresh)
         btn_container.addWidget(btn_search)
+        btn_search.style().unpolish(btn_search)
+        btn_search.style().polish(btn_search)
 
         btn_clear = QPushButton("Limpiar")
         btn_clear.setProperty("class", "secondary")
