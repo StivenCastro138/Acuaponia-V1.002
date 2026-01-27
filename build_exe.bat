@@ -22,6 +22,7 @@ if exist dist rd /s /q dist
 
 echo.
 echo 3. Generando ejecutable (.exe) con icono...
+REM 
 py -3.11 -m PyInstaller --noconfirm --onedir --windowed ^
  --name "%APP_NAME%" ^
  --icon "%ICO_PATH%" ^
@@ -29,9 +30,22 @@ py -3.11 -m PyInstaller --noconfirm --onedir --windowed ^
  --add-data "Config;Config" ^
  --add-data "Modulos;Modulos" ^
  --add-data "BasedeDatos;BasedeDatos" ^
- --add-data "Modelos;Modelos" ^
  --add-data "Herramientas;Herramientas" ^
  "app.py"
+
+REM 
+if %ERRORLEVEL% NEQ 0 (
+    color 4F
+    echo.
+    echo ===========================================
+    echo ERROR CRITICO: La compilacion ha fallado.
+    echo No se ha creado el archivo .exe.
+    echo Revise los errores arriba (letras rojas).
+    echo ===========================================
+    pause
+    exit /b
+)
+color 07
 
 echo.
 echo 4. Creando acceso directo con icono en el Escritorio...
@@ -44,8 +58,13 @@ powershell -ExecutionPolicy Bypass -Command ^
  "$s.Save()"
 
 echo.
-echo 5. Iniciando aplicacion automáticamente...
-start "" "%EXE_PATH%"
+echo 5. Iniciando aplicacion automaticamente...
+if exist "%EXE_PATH%" (
+    start "" "%EXE_PATH%"
+) else (
+    echo Error: No se encuentra el archivo ejecutable.
+    pause
+)
 
 echo ===========================================
 echo PROCESO FINALIZADO EXITOSAMENTE
