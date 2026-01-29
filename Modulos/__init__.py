@@ -7,7 +7,6 @@ from .FishTracker import FishTracker
 from .FrameProcessor import FrameProcessor
 from .ImageViewerDialog import ImageViewerDialog
 from .MainWindow import MainWindow
-from .ManualMeasurementDialog import ManualMeasurementDialog
 from .MorphometricAnalyzer import MorphometricAnalyzer
 from .SimpleMotionDetector import SimpleMotionDetector
 from .AdvancedDetector import AdvancedDetector
@@ -27,7 +26,6 @@ __all__ = [
     'FrameProcessor',
     'ImageViewerDialog',
     'MainWindow',
-    'ManualMeasurementDialog',
     'MorphometricAnalyzer',
     'SimpleMotionDetector',
     'AdvancedDetector',

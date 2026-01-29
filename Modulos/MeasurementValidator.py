@@ -1,4 +1,13 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Validador de Integridad de Mediciones (MeasurementValidator.py)
+DESCRIPCIÓN: Motor de reglas de negocio (Business Rules Engine) que audita los datos 
+             biométricos antes de su persistencia. Aplica restricciones biológicas, 
+             geométricas y estereoscópicas para filtrar falsos positivos.
+"""
+
 from typing import Dict, List
+
 from Config.Config import Config
 
 class MeasurementValidator:
@@ -16,8 +25,9 @@ class MeasurementValidator:
         length = metrics.get('length_cm', 0.0)
         weight = metrics.get('weight_g', 0.0)
         height = metrics.get('height_cm', 0.0)
-        lat_area = float(metrics.get('lat_area_cm2', metrics.get('lat_area_cm2', 0.0)))
-        top_area = float(metrics.get('top_area_cm2', metrics.get('top_area_cm2', 0.0)))
+        width = metrics.get('width_cm', 0.0)
+        lat_area = float(metrics.get('lat_area_cm2', 0.0))
+        top_area = float(metrics.get('top_area_cm2', 0.0))
         k_factor = metrics.get('condition_factor', 0.0)
 
         # 1. Validar Rangos Físicos 
@@ -56,14 +66,27 @@ class MeasurementValidator:
 
             # B. Validación de Segmentación 
             if lat_area > 0 and height > 0:
-                bounding_box_area = length * height
-
-                if bounding_box_area > 0:
-                    occupancy_ratio = lat_area / bounding_box_area
-                    
-                    if occupancy_ratio > Config.MAX_OCCUPANCY_RATIO:
-                        errors.append("⚠️ Forma sospechosa: El contorno es demasiado rectangular (Posible fallo de IA).")
-                    elif occupancy_ratio < Config.MIN_OCCUPANCY_RATIO:
-                         errors.append("⚠️ Forma sospechosa: El area es muy pequena para el marco (Posible ruido).")
+                bbox_lat = length * height
+                occ_lat = lat_area / bbox_lat
+                if occ_lat > Config.MAX_OCCUPANCY_RATIO:
+                    errors.append("⚠️ Lateral: Contorno muy rectangular (Fallo IA).")
+                elif occ_lat < Config.MIN_OCCUPANCY_RATIO:
+                     errors.append("⚠️ Lateral: Área muy pequeña (Ruido).")
+                         
+            if top_area > 0 and width > 0:
+                bbox_top = length * width  
+                if bbox_top > 0:
+                    occ_top = top_area / bbox_top
+                    if occ_top > Config.MAX_TOP_OCCUPANCY_RATIO: 
+                        errors.append(f"⚠️ Cenital: Contorno rectangular ({occ_top:.2f}). ¿Es un ladrillo?")
+                    elif occ_top < Config.MIN_TOP_OCCUPANCY_RATIO: 
+                        errors.append(f"⚠️ Cenital: Objeto muy delgado ({occ_top:.2f}). ¿Es un cable?")
+        
+        if lat_area > 0 and top_area > 0:
+            if top_area > (lat_area * Config.MAX_AREA_INVERSION_TOLERANCE):
+                errors.append(
+                    f"⚠️ Incoherencia Espacial: Área Top ({top_area:.0f}) > Lateral ({lat_area:.0f}). "
+                    "Posible pez nadando de lado o cámaras invertidas."
+                )
 
         return errors

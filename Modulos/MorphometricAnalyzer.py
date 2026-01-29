@@ -1,8 +1,18 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Analizador Morfométrico (MorphometricAnalyzer.py)
+DESCRIPCIÓN: Motor de cálculo científico. Transforma datos geométricos crudos (píxeles, 
+             contornos, cajas) en variables biológicas precisas (gramos, cm, factor K).
+             Implementa algoritmos híbridos que combinan modelos alométricos estadísticos 
+             con aproximaciones volumétricas 3D.
+"""
+
 import math
 import cv2
 import numpy as np
 import logging
 from typing import Dict, Optional, Tuple
+
 from Config.Config import Config
 
 logger = logging.getLogger(__name__)
@@ -28,10 +38,7 @@ class MorphometricAnalyzer:
         real_area_top_cm2 = 0.0
         curvature_index = 1.0
         is_bent = False
-        
-        # ------------------------------------------------------------
-        # 1. ANÁLISIS VISTA LATERAL (Perfil)
-        # ------------------------------------------------------------
+
         if contour_lat is not None and len(contour_lat) >= 5:
             rect_lat = cv2.minAreaRect(contour_lat)
             (dim1, dim2) = rect_lat[1]
@@ -39,13 +46,12 @@ class MorphometricAnalyzer:
             box_length_px = max(dim1, dim2)
             box_height_px = min(dim1, dim2)
             
-            # --- DETECCIÓN DE DOBLECES ---
             if spine_length_px and spine_length_px > 0:
                 curvature_index = spine_length_px / box_length_px
 
                 if curvature_index > Config.BENDING_THRESHOLD:
                     is_bent = True
-                    logger.debug(f"Curvatura detectada. Indice={curvature_index:.3f}")
+                    logger.debug(f"Curvatura detectada. Indice={curvature_index:.3f}.")
 
                 l_cm = spine_length_px * scale_lat
             else:
@@ -53,31 +59,21 @@ class MorphometricAnalyzer:
 
             h_cm = box_height_px * scale_lat
 
-            # ✅ CÁLCULO ÁREA LATERAL
             area_px = cv2.contourArea(contour_lat)
             real_area_lat_cm2 = area_px * (scale_lat ** 2)
 
-        # ------------------------------------------------------------
-        # 2. ANÁLISIS VISTA CENITAL (Dorso)
-        # ------------------------------------------------------------
         if contour_top is not None and len(contour_top) >= 5:
             rect_top = cv2.minAreaRect(contour_top)
             (dim1_t, dim2_t) = rect_top[1]
             w_cm = min(dim1_t, dim2_t) * scale_top
             
-            # ✅ CÁLCULO ÁREA CENITAL
             area_top_px = cv2.contourArea(contour_top)
             real_area_top_cm2 = area_top_px * (scale_top ** 2)
         else:
-            # Estimación si falla la vista superior
             w_ratio = Config.DEFAULT_WIDTH_RATIO
             w_cm = h_cm * w_ratio
-            # Estimación de área cenital basada en rectángulo teórico
             real_area_top_cm2 = (l_cm * w_cm) * 0.85 
 
-        # ------------------------------------------------------------
-        # 3. RESTRICCIONES Y CÁLCULO FINAL
-        # ------------------------------------------------------------
         l_cm, h_cm, w_cm = MorphometricAnalyzer._apply_biological_constraints(l_cm, h_cm, w_cm)
         
         metrics = {
@@ -88,7 +84,6 @@ class MorphometricAnalyzer:
             'is_bent': is_bent
         }
         
-        # Calcular biomasa pasando ambas áreas
         derived = MorphometricAnalyzer._calculate_derived_metrics(
             length=l_cm, 
             height=h_cm, 
@@ -120,7 +115,6 @@ class MorphometricAnalyzer:
         l_cm = max(w_box_lat, h_box_lat) * scale_lat
         h_cm = min(w_box_lat, h_box_lat) * scale_lat
         
-        # Estimación básica de área lateral (rectángulo * factor de forma pez)
         est_lat_area = (l_cm * h_cm) * 0.65
         
         w_cm = 0.0
@@ -199,7 +193,6 @@ class MorphometricAnalyzer:
         # --- 5. FACTOR DE CONDICIÓN ---
         k_factor = (100 * weight) / (length ** 3)
 
-        # ✅ NOMBRES CORRECTOS PARA BASE DE DATOS
         return {
             'weight_g': round(weight, 2),
             'condition_factor': round(k_factor, 3),

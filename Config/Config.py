@@ -85,14 +85,14 @@ class Config:
     # RANGOS MORFOMÉTRICOS
     # ==========================================================================
 
-    MIN_LENGTH_CM = 4.0
-    MAX_LENGTH_CM = 50.0
+    MIN_LENGTH_CM = 2
+    MAX_LENGTH_CM = 60
 
-    MIN_HEIGHT_RATIO = 0.14
-    MAX_HEIGHT_RATIO = 0.35
+    MIN_HEIGHT_RATIO = 0.1
+    MAX_HEIGHT_RATIO = 0.4
 
     DEFAULT_WIDTH_RATIO = 0.18
-    MAX_WIDTH_RATIO_ADULT = 0.22
+    MAX_WIDTH_RATIO_ADULT = 0.25
 
     ALEVIN_THRESHOLD_CM = 15.0
 
@@ -115,9 +115,9 @@ class Config:
     # ==========================================================================
 
     # Calidad geométrica
-    MIN_SKELETON_PIXELS = 20
-    BENDING_THRESHOLD = 1.10
-    MIN_BOX_SIZE_PX = 15
+    MIN_SKELETON_PIXELS = 10
+    BENDING_THRESHOLD = 1.4
+    MIN_BOX_SIZE_PX = 10
 
     # Factor K de Fulton
     K_FACTOR_OPTIMAL = (0.9, 1.5)
@@ -129,9 +129,13 @@ class Config:
     MAX_WEIGHT_DEVIATION = 0.45
 
     # Calidad de la silueta detectada
-    MIN_OCCUPANCY_RATIO = 0.35
+    MIN_OCCUPANCY_RATIO = 0.15
     MAX_OCCUPANCY_RATIO = 0.90
-
+    MIN_TOP_OCCUPANCY_RATIO = 0.15
+    MAX_TOP_OCCUPANCY_RATIO = 0.90  
+    
+    # Relación entre áreas
+    MAX_AREA_INVERSION_TOLERANCE = 3
     # Rango morfométrico permitido
     MIN_LENGTH_CM = 4.0
     MAX_LENGTH_CM = 50.0

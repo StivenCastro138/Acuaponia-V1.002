@@ -34,8 +34,8 @@ pywin32>=306
 winshell>=0.6
 psutil>=5.9
 
-# --- GPU (optional, safe fallback) ---
-pynvml>=11.5
+# --- GPU ---
+nvidia-ml-py>=12.535.0
 
 # --- Utilities ---
 requests>=2.31

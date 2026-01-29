@@ -1,8 +1,19 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Detector de Estabilidad de Escena (SimpleMotionDetector.py)
+DESCRIPCIÓN: Algoritmo de visión artificial ligero diseñado para medir la entropía
+             de movimiento en una secuencia de video. Actúa como un disparador (Trigger)
+             para el sistema biométrico, asegurando que solo se analicen frames nítidos.
+             Implementa aceleración por hardware (GPU) cuando está disponible.
+"""
+
 import cv2
 import numpy as np
 import logging
 from collections import deque
 from typing import Optional
+
+from Config.Config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +23,7 @@ class SimpleMotionDetector:
     Mantiene los frames en la VRAM de la GPU para evitar descargas innecesarias.
     """
     
-    def __init__(self, threshold: float = 8.0, history_size: int = 5, proc_width: int = 320):
+    def __init__(self, threshold: float = 8.0, history_size: int = Config.STABILITY_FRAMES, proc_width: int = 320):
         """
         Args:
             threshold: Sensibilidad (Más bajo = detecta movimientos más sutiles).
@@ -27,27 +38,24 @@ class SimpleMotionDetector:
         self.motion_history: deque = deque(maxlen=history_size)
         self.current_motion_val: float = 0.0
         
-        # --- OPTIMIZACIÓN GPU ---
         self.use_cuda = False
         self.last_gpu_frame: Optional[cv2.cuda_GpuMat] = None
         self.gpu_filter = None
 
         try:
-            # Intentar inicializar recursos CUDA
             if cv2.cuda.getCudaEnabledDeviceCount() > 0:
                 self.gpu_filter = cv2.cuda.createGaussianFilter(cv2.CV_8UC1, cv2.CV_8UC1, (15, 15), 0)
                 self.use_cuda = True
-                logger.info("SimpleMotionDetector: Aceleracion CUDA activada.")
+                logger.info("Aceleracion CUDA activada.")
             else:
-                logger.warning("SimpleMotionDetector: No se detecto dispositivo CUDA. Usando CPU.")
+                logger.warning("No se detecto dispositivo CUDA. Usando CPU.")
         except Exception as e:
             logger.error(f"Error inicializando CUDA: {e}. Se usara CPU.")
 
-        # Fallback para CPU
         self.last_frame_cpu: Optional[np.ndarray] = None
         
         logger.debug(
-            "SimpleMotionDetector init | threshold=%.2f history=%d width=%d CUDA=%s",
+            "init | threshold=%.2f history=%d width=%d CUDA=%s.",
             threshold, history_size, proc_width, self.use_cuda
         )
     
@@ -56,7 +64,7 @@ class SimpleMotionDetector:
         Procesa un frame y determina si la escena está estática.
         """
         if frame is None or frame.size == 0:
-            logger.warning("Frame invalido recibido en motion detector")
+            logger.warning("Frame invalido recibido en motion detector.")
             return False
         
         if self.use_cuda:
@@ -65,14 +73,13 @@ class SimpleMotionDetector:
             return self._is_stable_cpu(frame)
 
     def _is_stable_gpu(self, frame: np.ndarray) -> bool:
-        # 1. Upload a GPU (Única transferencia grande)
+        # 1. Upload a GPU
         gpu_frame = cv2.cuda_GpuMat()
         gpu_frame.upload(frame)
         
         # 2. Pipeline en GPU
         processed_gpu = self._preprocess_frame_gpu(gpu_frame)
         
-        # Si es el primer frame, guardamos referencia en VRAM y salimos
         if self.last_gpu_frame is None:
             self.last_gpu_frame = processed_gpu
             return False
@@ -80,11 +87,9 @@ class SimpleMotionDetector:
         # 3. Diferencia Absoluta en GPU
         gpu_diff = cv2.cuda.absdiff(self.last_gpu_frame, processed_gpu)
         
-        # 4. Cálculo de media (Optimizado: calcSum evita descargar toda la imagen)
-        # calcSum retorna (suma_canal1, suma_canal2, ...)
+        # 4. Cálculo de media 
         diff_sum = cv2.cuda.calcSum(gpu_diff)[0]
         
-        # Calculamos el promedio dividiendo por el número de píxeles
         size = processed_gpu.size()
         pixel_count = size[0] * size[1]
         self.current_motion_val = diff_sum / pixel_count if pixel_count > 0 else 0.0
@@ -96,7 +101,7 @@ class SimpleMotionDetector:
 
     def _preprocess_frame_gpu(self, gpu_frame: cv2.cuda_GpuMat) -> cv2.cuda_GpuMat:
         """Pipeline de limpieza de imagen ejecutado 100% en la tarjeta gráfica."""
-        size = gpu_frame.size() # (width, height)
+        size = gpu_frame.size() 
         w, h = size
         
         # Resize
@@ -110,7 +115,7 @@ class SimpleMotionDetector:
         # Convertir a grises
         gpu_gray = cv2.cuda.cvtColor(gpu_small, cv2.COLOR_BGR2GRAY)
         
-        # Blur (usando el filtro pre-compilado)
+        # Blur 
         return self.gpu_filter.apply(gpu_gray)
 
     def _is_stable_cpu(self, frame: np.ndarray) -> bool:
@@ -168,4 +173,4 @@ class SimpleMotionDetector:
         self.last_frame_cpu = None
         self.motion_history.clear()
         self.current_motion_val = 0.0
-        logger.debug("Motion detector reset")
+        logger.debug("Reinicio del detector de movimiento.")

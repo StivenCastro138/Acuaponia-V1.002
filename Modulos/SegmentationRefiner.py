@@ -1,3 +1,11 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Refinador de Segmentación Basado en SAM (SegmentationRefiner.py)
+DESCRIPCIÓN: Implementa el modelo 'Segment Anything Model' (Meta AI) para convertir
+             cajas delimitadoras (Bounding Boxes) en máscaras binarias de alta precisión.
+             Es fundamental para separar el cuerpo del pez del fondo y de sus propias aletas.
+"""
+
 import cv2
 import numpy as np
 import logging

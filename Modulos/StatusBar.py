@@ -1,9 +1,16 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Barra de Estado y Telemetría (StatusBar.py)
+DESCRIPCIÓN: Widget personalizado que reside en la parte inferior de la ventana principal.
+             Proporciona monitoreo en tiempo real de los recursos del sistema (CPU, RAM, GPU)
+             y métricas de rendimiento de la aplicación (FPS, Latencia de Inferencia).
+"""
+
 import time
 import os
 import psutil
 import logging
 from typing import Optional, Final, Dict, Any
-
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame
 from PySide6.QtCore import Slot, QTimer
 from PySide6.QtGui import QCloseEvent
@@ -41,7 +48,6 @@ class StatusBar(QWidget):
         self._gpu_handle: Any = None
         self._nvml_initialized: bool = False
         
-        # Llamada inicial a cpu_percent
         psutil.cpu_percent(interval=None) 
 
         self.setFixedHeight(35)
@@ -81,7 +87,7 @@ class StatusBar(QWidget):
         self.lbl_cpu = self._create_label("CPU: 0%", self.HELP_TEXTS["cpu"], "dim")
         self.lbl_ram = self._create_label("RAM: -- MB", self.HELP_TEXTS["ram"], "dim")
         
-        # GPU (state="accent" reemplaza a COLOR_GPU)
+        # GPU 
         self.lbl_gpu_load = self._create_label("GPU: 0%", self.HELP_TEXTS["gpu"], "accent") 
         self.lbl_vram = self._create_label("VRAM: -- MB", self.HELP_TEXTS["vram"], "accent")
         
@@ -114,10 +120,6 @@ class StatusBar(QWidget):
         lbl.setProperty("state", state_type) 
         return lbl
 
-    # =========================================================================
-    #  MÉTODOS PÚBLICOS (Slots) - LOGICA INTACTA, SOLO CAMBIA EL ESTILO
-    # =========================================================================
-
     @Slot(str, str)
     def set_status(self, message: str, state: str = "info"):
         clean_message = message.lstrip("● ")
@@ -127,11 +129,10 @@ class StatusBar(QWidget):
     @Slot(float)
     def set_ia_time(self, ms: float):
         self.lbl_ia_time.setText(f"IA: {ms:.1f}ms")
-        # Logica original: > 3000ms es peligro
         if ms > 3000:
-            self._update_label_state(self.lbl_ia_time, "error") # error = COLOR_DANGER
+            self._update_label_state(self.lbl_ia_time, "error") 
         else:
-            self._update_label_state(self.lbl_ia_time, "info")  # info = COLOR_INFO
+            self._update_label_state(self.lbl_ia_time, "info")  
 
     @Slot(int)
     def set_measurement_count(self, count: int):
@@ -141,10 +142,10 @@ class StatusBar(QWidget):
     def set_camera_status(self, ok: bool):
         if ok:
             self.lbl_cameras.setText("📹 OK")
-            self._update_label_state(self.lbl_cameras, "success") # success = COLOR_SUCCESS
+            self._update_label_state(self.lbl_cameras, "success") 
         else:
             self.lbl_cameras.setText("📹 ERR")
-            self._update_label_state(self.lbl_cameras, "error")   # error = COLOR_DANGER
+            self._update_label_state(self.lbl_cameras, "error")  
 
     @Slot(float)
     def update_system_info(self, fps: Optional[float] = None):
@@ -153,11 +154,10 @@ class StatusBar(QWidget):
         # 1. Actualizar FPS
         if fps is not None:
             self.lbl_fps.setText(f"FPS: {fps:.1f}")
-            # Lógica original: < 15 FPS es peligro
             if fps < 15.0:
                 self._update_label_state(self.lbl_fps, "error")
             else:
-                self._update_label_state(self.lbl_fps, "normal") # normal = palette(text)
+                self._update_label_state(self.lbl_fps, "normal") 
 
         # 2. Refresco Hardware
         if current_time - self._last_hw_update >= self.UPDATE_INTERVAL_HW:
@@ -171,13 +171,12 @@ class StatusBar(QWidget):
             cpu_percent = psutil.cpu_percent(interval=None) 
             self.lbl_cpu.setText(f"CPU: {int(cpu_percent)}%")
             
-            # Lógica original: > 85% Rojo, > 60% Amarillo
             if cpu_percent > 85:
                 self._update_label_state(self.lbl_cpu, "error")
             elif cpu_percent > 60:
                 self._update_label_state(self.lbl_cpu, "warning")
             else:
-                self._update_label_state(self.lbl_cpu, "dim") # dim = COLOR_TEXT_DIM
+                self._update_label_state(self.lbl_cpu, "dim") 
 
             # RAM 
             mem_info = self._process.memory_info()
@@ -196,11 +195,10 @@ class StatusBar(QWidget):
             
             self.lbl_gpu_load.setText(f"GPU: {gpu_load}%")
             
-            # Lógica original: > 90% Amarillo
             if gpu_load > 90:
                 self._update_label_state(self.lbl_gpu_load, "warning")
             else:
-                self._update_label_state(self.lbl_gpu_load, "accent") # accent = COLOR_GPU
+                self._update_label_state(self.lbl_gpu_load, "accent") 
 
             # VRAM
             info = pynvml.nvmlDeviceGetMemoryInfo(self._gpu_handle)
@@ -217,7 +215,6 @@ class StatusBar(QWidget):
             except: pass
         event.accept()
 
-    # --- HELPER PRIVADO (La clave para que el estilo funcione) ---
     def _update_label_state(self, label: QLabel, new_state: str):
         if label.property("state") != new_state:
             label.setProperty("state", new_state)

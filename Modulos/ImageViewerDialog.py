@@ -241,13 +241,15 @@ class ImageViewerDialog(QDialog):
         """Genera el reporte adaptable al tema (Light/Dark Fix)"""
         
         def get_val(key_primary, key_alias=None, default=0.0):
-            # 1. Intenta buscar el nombre exacto (ej: manual_length_cm)
             val = self.measurement_info.get(key_primary)
+            
             if val is not None and val != "":
-                try: return float(val)
+                try: 
+                    f_val = float(val)
+                    if f_val > 0.001: 
+                        return f_val
                 except: pass
             
-            # 2. Si falla, intenta buscar el backup (ej: length_cm)
             if key_alias:
                 val = self.measurement_info.get(key_alias)
                 if val is not None and val != "":
@@ -283,9 +285,11 @@ class ImageViewerDialog(QDialog):
         else: etapa = "Engorde"
 
         # Badge de Tipo
-        tipo_str = str(self.measurement_info.get('type', '')).lower()
+        tipo_str = str(self.measurement_info.get('measurement_type', '')).lower()
         if "auto" in tipo_str:
             tipo_txt, tipo_state = "🤖 IA Automática", "auto"
+        elif "ia_refined" in tipo_str:
+             tipo_txt, tipo_state = "✨ IA Refinada (3D)", "success"
         else:
             tipo_txt, tipo_state = "🖐️ Manual / Editado", "manual"
 
