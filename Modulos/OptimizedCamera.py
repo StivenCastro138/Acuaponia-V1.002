@@ -1,11 +1,20 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Driver de Cámara de Alto Rendimiento (OptimizedCamera.py)
+DESCRIPCIÓN: Wrapper multihilo para OpenCV VideoCapture. Implementa el patrón 
+             'Threaded Video Capture' para desacoplar la adquisición de imágenes (I/O)
+             del procesamiento lógico, reduciendo la latencia y aumentando los FPS.
+"""
+
 import cv2
 import threading
-import logging
+
 from Config.Config import Config
 
-logger = logging.getLogger(__name__)
-
 class OptimizedCamera:
+    """
+    Controlador de cámara asíncrono (Non-blocking Video Capture).
+    """
     def __init__(self, camera_index):
         self.camera_index = camera_index
         self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
@@ -16,7 +25,6 @@ class OptimizedCamera:
         self.cap.set(cv2.CAP_PROP_FPS, Config.PREVIEW_FPS)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, Config.BUFFERSIZE)
                 
-        # Threading para captura continua
         self.latest_frame = None
         self.lock = threading.Lock()
         self.running = False

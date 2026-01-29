@@ -1,3 +1,11 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Rastreador Temporal (FishTracker.py)
+DESCRIPCIÓN: Implementa lógica de suavizado temporal para estabilizar las mediciones
+             biométricas a lo largo de una secuencia de video. Reduce el "jitter" (ruido)
+             causado por micro-movimientos del pez o fluctuaciones de la segmentación.
+"""
+
 import cv2
 import numpy as np
 import time

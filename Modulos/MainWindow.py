@@ -1,38 +1,69 @@
-import cv2
+
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Ventana Principal de Control (MainWindow.py)
+DESCRIPCIÓN: Núcleo de la Interfaz Gráfica de Usuario (GUI).
+             Esta clase actúa como el 'Controlador Maestro' de la aplicación, integrando:
+             1. Visualización de video en tiempo real (Soporte para Cámaras Estéreo).
+             2. Panel de control para operarios (Captura, Calibración, Configuración).
+             3. Dashboard de telemetría (Gráficas de crecimiento, Sensores IoT).
+             4. Gestión del ciclo de vida de los hilos de procesamiento (FrameProcessor).
+"""
+
+import os
+import time
+import json
+import csv
+import re
+import shutil
+import threading
+import logging
+import platform
+import subprocess
+import urllib.request
+from datetime import datetime
 import numpy as np
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QGridLayout, QSpinBox, QDoubleSpinBox,
-    QGroupBox, QTextEdit, QProgressBar, QTabWidget, QComboBox,
-    QCheckBox, QFileDialog, QMessageBox, QDialog, QLineEdit,
-    QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea,
-    QListWidget, QListWidgetItem, QSplitter, QSizePolicy,
-    QDateEdit, QTimeEdit, QAbstractItemView, QStyle, QFrame, QInputDialog,QTabBar
-)
-from PySide6.QtCore import (QTimer, Qt, QCoreApplication, QDate, QTime, QSize)
-from PySide6.QtGui import (QImage, QPixmap, QIntValidator, QColor, QFont, QIcon)
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import cv2
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak 
-from reportlab.platypus import Image as PDFImage 
-from reportlab.lib.pagesizes import A4 
-from reportlab.lib import colors 
-from reportlab.lib.styles import getSampleStyleSheet
-import qdarktheme 
-import threading, qrcode
-import urllib.request
-import shutil
-import darkdetect 
-import time 
-import os
-import json
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from PySide6.QtMultimedia import QSoundEffect
+from PySide6.QtCore import (
+    Qt, QTimer, QSize, QDate, QTime, QUrl,
+    QPropertyAnimation, QEasingCurve, QAbstractAnimation
+)
+from PySide6.QtGui import (
+    QImage, QPixmap, QColor, QFont, QIcon, QIntValidator
+)
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget,
+    QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
+    QPushButton, QLabel, QTextEdit, QProgressBar,
+    QTabWidget, QTabBar, QGroupBox, QFrame,
+    QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox,
+    QFileDialog, QMessageBox, QDialog, QLineEdit,
+    QTableWidget, QTableWidgetItem, QHeaderView,
+    QScrollArea, QListWidget, QListWidgetItem,
+    QSizePolicy, QDateEdit, QTimeEdit,
+    QAbstractItemView, QStyle, QGraphicsOpacityEffect
+)
 import sqlite3
-from datetime import datetime
-import logging
-import csv
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer,
+    Image, PageBreak, Table, TableStyle
+)
+import qdarktheme
+import darkdetect
+import qrcode
+
 from BasedeDatos.DatabaseManager import DatabaseManager
+from BasedeDatos.DatabaseManager import MEASUREMENT_COLUMNS
 from Config.Config import Config
+from Herramientas.SensorService import SensorService
 from .FishDetector import FishDetector
 from .FishTracker import FishTracker
 from .FrameProcessor import FrameProcessor
@@ -45,7 +76,6 @@ from Modulos.AdvancedDetector import AdvancedDetector
 from .FishAnatomyValidator import FishAnatomyValidator
 from .CaptureDecisionDialog import CaptureDecisionDialog
 from .OptimizedCamera import OptimizedCamera
-from .ClickableLabel import ClickableLabel
 from Herramientas.mobil import start_flask_server, mobile_capture_queue, get_local_ip
 
 logger = logging.getLogger(__name__)
@@ -79,7 +109,7 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Sistema Avanzado de Medición de Peces v1.3")
+        self.setWindowTitle("FishTrace v1.2b")
         self.setGeometry(100, 100, 1600, 1000)
             
         # CONFIGURACIÓN INICIAL DE LÓGICA 
@@ -108,7 +138,7 @@ class MainWindow(QMainWindow):
         self.current_tab = 1          
 
         # INICIALIZAR UI
-
+        self.setWindowIcon(QIcon("logo.ico"))
         self.load_config()
         self.init_ui()
         self.sync_ui_with_config()
@@ -126,11 +156,15 @@ class MainWindow(QMainWindow):
         self.ram_timer.timeout.connect(self.status_bar.update_system_info)  
         self.ram_timer.start(5000)
         
+        self.save_sound = QSoundEffect(self)
+        self.save_sound.setSource(QUrl.fromLocalFile(os.path.abspath("save_ok.wav")))
+        self.save_sound.setVolume(1)
+        
         try:
             count = self.db.get_today_measurements_count()
             self.status_bar.set_measurement_count(count)
         except Exception as e:
-            logger.warning(f"Error al cargar contador inicial: {e}")
+            logger.warning(f"Error al cargar contador inicial: {e}.")
             
         self.cache_params = {
             'min_area': 5000,
@@ -159,7 +193,7 @@ class MainWindow(QMainWindow):
         self.spin_val_max_top.valueChanged.connect(self.update_cache)
 
         self.update_cache()
-        logger.info("✅ Sistema de variables espejo (Cache) sincronizado.")
+        logger.info("Sistema de variables espejo (Cache) sincronizado.")
         
         # VARIABLES DE FPS Y ARRANQUE 
         self.adaptive_fps = True
@@ -187,7 +221,6 @@ class MainWindow(QMainWindow):
         
         measurement_tab = self.create_measurement_tab()
         self.tabs.addTab(measurement_tab, "Medición Automática")
-        
         
         manual_tab = self.create_manual_tab()
         self.tabs.addTab(manual_tab, "Medición Manual")
@@ -219,7 +252,6 @@ class MainWindow(QMainWindow):
         # Configuración
         self.tabs.tabBar().setTabToolTip(4, "Parámetros y configuración del sistema")
 
-        # Cursor tipo enlace (mano)
         self.tabs.tabBar().setCursor(Qt.PointingHandCursor)
             
     def on_processing_complete(self, result):
@@ -311,21 +343,17 @@ class MainWindow(QMainWindow):
             self.display_frame(frame_l_copy, self.lbl_left)
             self.display_frame(frame_t_copy, self.lbl_top)
         
-        # ACTUALIZAR BARRA DE CONFIANZA CON ANIMACIÓN
         if hasattr(self, 'confidence_bar'):
             target_value = int(confidence * 100)
             
             self.confidence_bar.setValue(0) 
             self._animate_confidence(0, target_value) 
 
-        # RELLENADO AUTOMÁTICO
         if self.tabs.currentIndex() == 1:  
             self._auto_fill_manual_form(metrics, confidence)
 
-        # GENERAR REPORTE 
         self._update_results_report(metrics, confidence, warnings, result)
 
-        # LÓGICA DE AUTO-CAPTURA 
         self._handle_stability_and_autocapture(result, confidence, warnings)
 
     def _animate_confidence(self, current_value, target_value):
@@ -333,16 +361,13 @@ class MainWindow(QMainWindow):
         Anima la barra de confianza usando QPropertyAnimation.
         Se adapta a la velocidad configurada.
         """
-        from PySide6.QtCore import QPropertyAnimation, QEasingCurve
         
         if not hasattr(self, 'confidence_bar'):
             return
         
-        # Si las animaciones están desactivadas, saltar directo al valor
         if self.anim_duration == 0:
             self.confidence_bar.setValue(target_value)
             
-            # Actualizar nivel
             if target_value >= 80:
                 new_level = "high"
             elif target_value >= 60:
@@ -355,19 +380,16 @@ class MainWindow(QMainWindow):
             self.confidence_bar.style().polish(self.confidence_bar)
             return
         
-        # ✅ USAR QPropertyAnimation para animación suave
         anim = QPropertyAnimation(self.confidence_bar, b"value")
-        anim.setDuration(self.anim_duration * 3)  # Más lento para que se note
+        anim.setDuration(self.anim_duration * 3)  
         anim.setStartValue(current_value)
         anim.setEndValue(target_value)
         
-        # Curva de animación según modo
         if self.anim_duration <= 150:
-            anim.setEasingCurve(QEasingCurve.OutCubic)  # Rápida
+            anim.setEasingCurve(QEasingCurve.OutCubic)  
         else:
-            anim.setEasingCurve(QEasingCurve.OutElastic)  # Suave con rebote
+            anim.setEasingCurve(QEasingCurve.OutElastic)
         
-        # Actualizar nivel al finalizar
         def update_level():
             val = self.confidence_bar.value()
             if val >= 80:
@@ -473,7 +495,7 @@ class MainWindow(QMainWindow):
                 count = cursor.fetchone()[0]
                 return count + 1
         except Exception as e:
-            logger.error(f"Error calculando secuencia: {e}")
+            logger.error(f"Error calculando secuencia: {e}.")
             return 1
         
     def _auto_fill_manual_form(self, metrics, confidence):
@@ -625,44 +647,61 @@ class MainWindow(QMainWindow):
             
             self.processing_lock = True
             self.status_bar.set_status("💾 Guardando medición automática...", "success")
+            
             try:
-                self._save_measurement_silent()
-                QTimer.singleShot(5000, self.unlock_after_save)
+                QTimer.singleShot(17000, self._save_measurement_silent)
+                QTimer.singleShot(17050, self.save_sound.play)
+                QTimer.singleShot(22000, self.unlock_after_save)
+          
             except Exception as e:
                 logger.error(f"Error en auto-guardado: {e}.")
                 self.processing_lock = False
                 self.status_bar.set_status(f"❌ Error al guardar: {str(e)}.", "error")
 
     def unlock_after_save(self):
-        """Desbloqueo usando estilos centralizados"""
-        self.processing_lock = False
-        self.results_text.clear()
-        self._set_results_style("ready")
-        
-        self.results_text.setPlainText(
-            "🟢 SISTEMA LISTO PARA SIGUIENTE MEDICIÓN\n\n"
-            "Esperando que coloques otro pez...\n\n"
-            "💡 El sistema guardará automáticamente cuando detecte:\n"
-            " • Pez completamente estable\n"
-            " • Confianza ≥ 70%\n"
-            " • Sin advertencias anatómicas"
-        )
-        
-        self.lbl_stability.setText("🟢 ESPERANDO PEZ")
-        self.lbl_stability.setProperty("state", "empty") 
-        self.lbl_stability.style().unpolish(self.lbl_stability)
-        self.lbl_stability.style().polish(self.lbl_stability)
-        
-        
-        if hasattr(self, 'confidence_bar'):
-             self.confidence_bar.setValue(0)
-             self.confidence_bar.setProperty("state", "idle")
-             self.confidence_bar.style().unpolish(self.confidence_bar)
-             self.confidence_bar.style().polish(self.confidence_bar)
-             
-        self.status_bar.set_status("⏳ Listo para próxima captura")
-        logger.info("Sistema desbloqueado, listo para siguiente medicion.")
+        """
+        Desbloqueo BLINDADO: Garantiza que el sistema vuelva a estar disponible
+        incluso si hay errores visuales.
+        """
+        try:
+            self.processing_lock = False
+            
+            if hasattr(self, 'btn_save'):
+                self.btn_save.setEnabled(True)
 
+            self.results_text.clear()
+            self._set_results_style("ready")
+            
+            self.results_text.setPlainText(
+                "🟢 SISTEMA LISTO PARA SIGUIENTE MEDICIÓN\n\n"
+                "Esperando que coloques otro pez...\n\n"
+                "💡 El sistema guardará automáticamente cuando detecte:\n"
+                " • Pez completamente estable\n"
+                " • Confianza ≥ 70%\n"
+                " • Sin advertencias anatómicas"
+            )
+            
+            if hasattr(self, 'lbl_stability'):
+                self.lbl_stability.setText("🟢 ESPERANDO PEZ")
+                self.lbl_stability.setProperty("state", "empty") 
+                self.lbl_stability.style().unpolish(self.lbl_stability)
+                self.lbl_stability.style().polish(self.lbl_stability)
+            
+            if hasattr(self, 'confidence_bar'):
+                 self.confidence_bar.setValue(0)
+                 self.confidence_bar.setProperty("state", "idle")
+                 self.confidence_bar.style().unpolish(self.confidence_bar)
+                 self.confidence_bar.style().polish(self.confidence_bar)
+                 
+            if hasattr(self, 'status_bar'):
+                self.status_bar.set_status("⏳ Listo para próxima captura")
+            
+            logger.info("Sistema desbloqueado correctamente.")
+
+        except Exception as e:
+            logger.error(f"Error NO CRÍTICO al desbloquear UI: {e}")
+            self.processing_lock = False
+            
     def force_unlock_if_stuck(self):
         """Desbloqueo de emergencia"""
         if self.processing_lock:
@@ -727,12 +766,13 @@ class MainWindow(QMainWindow):
         
         # VISORES DE VIDEO
         video_layout = QHBoxLayout()
+        self.lbl_left = QLabel() 
+        self.lbl_top = QLabel()
         
         # Cámara Lateral
         left_group = QGroupBox("Vista Lateral (Perfil)")
         left_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         left_layout = QVBoxLayout(left_group)
-        self.lbl_left = ClickableLabel()
         self.lbl_left.setMinimumSize(640, 360)
         self.lbl_left.setProperty("class", "video-lateral") 
         self.lbl_left.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -748,7 +788,6 @@ class MainWindow(QMainWindow):
         top_group = QGroupBox("Vista Cenital (Dorso)")
         top_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         top_layout = QVBoxLayout(top_group)
-        self.lbl_top = ClickableLabel()
         self.lbl_top.setMinimumSize(640, 360)
         self.lbl_top.setProperty("class", "video-cenital")
         self.lbl_top.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -830,7 +869,6 @@ class MainWindow(QMainWindow):
         """
         Captura frames y los envía al hilo de procesamiento con FEEDBACK VISUAL COMPLETO.
         """
-        # VALIDACIONES CRÍTICAS
         if self.processing_lock:
             logger.warning("Procesamiento ya en curso, ignorando nueva captura.")
             self.status_bar.set_status("⚠️ Ya hay un análisis en proceso", "warning")
@@ -840,7 +878,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "❌ Cámaras no disponibles")
             return
         
-        # CAPTURA DE FRAMES
         ret_left, frame_left = self.cap_left.read()
         ret_top, frame_top = self.cap_top.read()
         
@@ -936,8 +973,9 @@ class MainWindow(QMainWindow):
         # Vista previa
         preview_group = QGroupBox("Monitor de Captura")
         preview_layout = QHBoxLayout(preview_group)
+        self.lbl_manual_left = QLabel()  
+        self.lbl_manual_top = QLabel()
 
-        self.lbl_manual_left = ClickableLabel()
         self.lbl_manual_left.setText("Cámara Lateral")
         self.lbl_manual_left.setMinimumSize(580, 340)
         self.lbl_manual_left.setProperty("class", "video-lateral")
@@ -946,7 +984,6 @@ class MainWindow(QMainWindow):
         self.lbl_manual_left.pause_callback = self.toggle_camera_pause
         preview_layout.addWidget(self.lbl_manual_left)
 
-        self.lbl_manual_top = ClickableLabel()
         self.lbl_manual_top.setText("Cámara Cenital")
         self.lbl_manual_top.setMinimumSize(580, 340)
         self.lbl_manual_top.setProperty("class", "video-cenital")
@@ -1219,7 +1256,7 @@ class MainWindow(QMainWindow):
 
         config = self.SPIN_CONFIGS.get(field_type)
         if not config:
-            logger.error(f"Configuración no encontrada para: {field_type}")
+            logger.error(f"Configuracion no encontrada para: {field_type}.")
             return QDoubleSpinBox()
 
         spin = QDoubleSpinBox()
@@ -1295,8 +1332,6 @@ class MainWindow(QMainWindow):
         time_edit.setTime(QTime(9, 0))  
         time_edit.setToolTip("Hora en la que se midió el pez.")
 
-        
-        # ✅ USAR MÉTODO HELPER EXISTENTE
         spin_length = self._create_biometric_spinbox('length')
         spin_length.setToolTip("Longitud estándar del pez.")
         
@@ -1514,7 +1549,6 @@ class MainWindow(QMainWindow):
         txt_notes.setPlaceholderText("Observaciones opcionales...")
         txt_notes.setToolTip("Observaciones y notas del pez.")
         
-
         fields = [
             ("ID Pez:", txt_id),
             ("Fecha:", date_edit),
@@ -1566,7 +1600,6 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-         
             try:
                 qdate = date_edit.date()
                 qtime = time_edit.time()
@@ -1617,7 +1650,7 @@ class MainWindow(QMainWindow):
                     raise Exception("Base de datos no disponible")
                         
             except Exception as e:
-                logger.error(f"Error guardando captura externa: {e}")
+                logger.error(f"Error guardando captura externa: {e}.")
                 QMessageBox.critical(dialog, "Error", f"No se pudo guardar: {str(e)}")
         
         btn_save.clicked.connect(save_final)
@@ -1698,15 +1731,18 @@ class MainWindow(QMainWindow):
         
         btn_test = QPushButton("Verificar")
         btn_test.setProperty("class", "primary") 
+        btn_test.style().unpolish(btn_test)
+        btn_test.style().polish(btn_test)
         btn_test.clicked.connect(lambda: os.system(f'start {url}'))  
         btn_test.setToolTip("Verífica que la página este activa.")
         
         btn_cancel = QPushButton("Cerrar")
         btn_cancel.setProperty("class", "warning") 
+        btn_cancel.style().unpolish(btn_cancel)
+        btn_cancel.style().polish(btn_cancel)
         btn_cancel.setToolTip("Cerrar el código QR.")
         btn_cancel.clicked.connect(dialog.reject)
         
-        btn_layout.addWidget(btn_test)
         btn_layout.addWidget(btn_test)
         btn_layout.addWidget(btn_cancel)
         layout.addLayout(btn_layout)
@@ -1769,7 +1805,6 @@ class MainWindow(QMainWindow):
         timer.timeout.connect(check_mobile_capture)
         timer.start()
         
-        
         try:
             result = dialog.exec()
             
@@ -1808,7 +1843,7 @@ class MainWindow(QMainWindow):
         except (urllib.error.URLError, TimeoutError, ConnectionRefusedError):
             return False
         except Exception as e:
-            logger.debug(f"Error inesperado verificando servidor: {e}")
+            logger.debug(f"Error inesperado verificando servidor: {e}.")
             return False
 
     def update_filename_preview(self):
@@ -1946,7 +1981,7 @@ class MainWindow(QMainWindow):
                 self.results_text.setPlainText("❌ Error: No se pudo identificar la biometría en esta foto.\nIntente reubicar el pez o mejorar la iluminación.")
 
         except Exception as e:
-            logger.error(f"Error en run_ai_assist_manual: {e}")
+            logger.error(f"Error en run_ai_assist_manual: {e}.")
             self.status_bar.set_status(f"❌ Error de IA: {str(e)}", "error")
             self._set_results_style("error")
 
@@ -1962,12 +1997,12 @@ class MainWindow(QMainWindow):
         """
 
         if not self.last_result or self.processing_lock:
-            logger.warning("No hay resultado para guardar o sistema bloqueado")
+            logger.warning("No hay resultado para guardar o sistema bloqueado.")
             return
         
         metrics = self.last_result.get('metrics', {})
         if not metrics:
-            logger.error("Resultado sin metricas validas")
+            logger.error("Resultado sin metricas validas.")
             return
 
         validation_errors = MeasurementValidator.validate_measurement(metrics)
@@ -2002,20 +2037,16 @@ class MainWindow(QMainWindow):
             try:
                 count_today = self.db.get_today_measurements_count()
                 fish_id = str(count_today + 1)  
-                logger.info(f"Using daily counter for fish_id: {fish_id}")
+                logger.info(f"Usando el contador diario para fish_id: {fish_id}")
             except:
                 fish_id = f"AUTO_{timestamp.strftime('%Y%m%d_%H%M%S')}"
-                logger.warning(f"Daily counter failed, using timestamp: {fish_id}")
-            
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            # PREPARAR NOMBRE DE ARCHIVO DESCRIPTIVO
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                logger.warning(f"Error en el contador diario al utilizar la marca de tiempo: {fish_id}")
+
             filename_parts = [
                 f"auto_{fish_id}",
                 f"L{length_cm:.1f}cm"
             ]
             
-            # ✅ Solo agregar al nombre si existen
             if height_cm > 0:
                 filename_parts.append(f"H{height_cm:.1f}cm")
             if width_cm > 0:
@@ -2051,7 +2082,6 @@ class MainWindow(QMainWindow):
                 cv2.resize(frame_top, (Config.SAVE_WIDTH, Config.SAVE_HEIGHT))
             ))
             
-            # ✅ MEJORADO: Anotaciones con TODAS las dimensiones
             font = cv2.FONT_HERSHEY_SIMPLEX
             y_pos = 30
             
@@ -2088,9 +2118,7 @@ class MainWindow(QMainWindow):
             # Guardar imagen
             cv2.imwrite(filepath, combined)
             
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            # PREPARAR DATOS PARA BASE DE DATOS
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            api_data = SensorService.get_water_quality_data()
             data = {
                 'timestamp': timestamp.isoformat(),
                 'fish_id': fish_id,  
@@ -2121,12 +2149,9 @@ class MainWindow(QMainWindow):
                 'validation_errors': ', '.join(validation_errors) if validation_errors else ''
             }
             
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            # GUARDAR EN BASE DE DATOS
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            data.update(api_data)
             measurement_id = self.db.save_measurement(data)
             
-            # ✅ Logging detallado
             logger.info(
                 f"Auto measurement saved: "
                 f"ID={measurement_id}, "
@@ -2138,9 +2163,6 @@ class MainWindow(QMainWindow):
                 f"Conf={confidence:.0%}"
             )
             
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            # ACTUALIZAR INTERFAZ
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             self.btn_save.setEnabled(False)
             
             # Actualizar historial
@@ -2148,10 +2170,7 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
             self.refresh_history()
             self.refresh_daily_counter()
-            
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            # NOTIFICACIÓN SEGÚN MODO
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
             if self.auto_capture_enabled:
                 self.status_bar.set_status(f"✅ Pez #{fish_id} guardado con éxito", "success")
             else:
@@ -2200,9 +2219,6 @@ class MainWindow(QMainWindow):
 
         notes = str(self.txt_manual_notes.text().strip())
         
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # PASO 2: VALIDACIONES
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         if not fish_id:
             QMessageBox.warning(self, "⚠️ Campo Requerido", "Debe ingresar un ID para el pez.")
             self.status_bar.set_status("⚠️ Falta ID del pez", "warning")
@@ -2213,7 +2229,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "⚠️ ID Largo", "El ID no puede superar los 50 caracteres.")
             return
         
-        import re
+
         if not re.match(r'^[a-zA-Z0-9_-]+$', fish_id):
             QMessageBox.warning(self, "⚠️ ID Inválido", "Solo letras, números, guiones y guiones bajos.")
             return
@@ -2234,9 +2250,6 @@ class MainWindow(QMainWindow):
             )
             if reply == QMessageBox.StandardButton.No: return
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # PASO 3: GUARDAR IMAGEN (CON TODOS LOS DIBUJOS ORIGINALES)
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         try:
             timestamp = datetime.now()
             safe_fish_id = re.sub(r'[^\w\-]', '_', fish_id)
@@ -2250,12 +2263,10 @@ class MainWindow(QMainWindow):
             filepath = os.path.join(Config.IMAGES_MANUAL_DIR, filename)
             os.makedirs(Config.IMAGES_MANUAL_DIR, exist_ok=True)
             
-            # --- Resize y Combine ---
             frame_left_resized = cv2.resize(self.manual_frame_left, (Config.SAVE_WIDTH, Config.SAVE_HEIGHT), interpolation=cv2.INTER_CUBIC)
             frame_top_resized = cv2.resize(self.manual_frame_top, (Config.SAVE_WIDTH, Config.SAVE_HEIGHT), interpolation=cv2.INTER_CUBIC)
             combined = np.hstack((frame_left_resized, frame_top_resized))
             
-            # --- DIBUJO DETALLADO (Restaurado) ---
             font = cv2.FONT_HERSHEY_SIMPLEX
             color_cyan = (0, 255, 255)
             color_green = (0, 255, 0)
@@ -2282,13 +2293,13 @@ class MainWindow(QMainWindow):
                 
                 # Semáforo de colores
                 if 0.8 <= k_factor <= 1.8:
-                    k_color = (0, 255, 0)  # Verde
+                    k_color = (0, 255, 0)  
                     k_status = "OPTIMO"
                 elif 0.5 <= k_factor <= 2.5:
-                    k_color = (0, 165, 255)  # Naranja
+                    k_color = (0, 165, 255)  
                     k_status = "ACEPTABLE"
                 else:
-                    k_color = (0, 0, 255)  # Rojo
+                    k_color = (0, 0, 255)  
                     k_status = "ANORMAL"
                 
                 cv2.putText(combined, f"Factor K: {k_factor:.3f} ({k_status})",
@@ -2318,9 +2329,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error Guardando Imagen", f"{e}")
             return
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # PASO 4: PREPARAR DATOS (BLINDADOS + COMPLETOS)
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         ai_lat_area = 0.0
         ai_top_area = 0.0
         ai_vol = 0.0
@@ -2329,7 +2337,7 @@ class MainWindow(QMainWindow):
             ai_lat_area = float(self.last_metrics.get('lat_area_cm2', 0))
             ai_top_area = float(self.last_metrics.get('top_area_cm2', 0))
             ai_vol = float(self.last_metrics.get('volume_cm3', 0))
-
+        api_data = SensorService.get_water_quality_data()
         data = {
             'timestamp': timestamp.isoformat(),
             'fish_id': str(fish_id),
@@ -2357,15 +2365,9 @@ class MainWindow(QMainWindow):
             'image_path': str(filepath),
             'validation_errors': '',
             
-            # API (Nulos explícitos)
-            'api_air_temp_c': None, 'api_water_temp_c': None, 'api_ph': None,
-            'api_rel_humidity': None, 'api_abs_humidity_g_m3': None, 
-            'api_cond_us_cm': None, 'api_do_mg_l': None
         }
-        
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # PASO 5: GUARDAR EN BD
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        data.update(api_data)
+
         try:
             m_id = self.db.save_measurement(data)
             
@@ -2380,7 +2382,7 @@ class MainWindow(QMainWindow):
             
                 
         except Exception as e:
-            logger.error(f"Error BD: {e}")
+            logger.error(f"Error BD: {e}.")
             self.status_bar.set_status("❌ Error de Base de Datos", "error")
             QMessageBox.critical(self, "Error Base de Datos", f"No se pudo registrar en la BD:\n{e}")
             # Intentar borrar la imagen huérfana
@@ -2397,9 +2399,7 @@ class MainWindow(QMainWindow):
         try:
             metrics = self.last_metrics
             timestamp = datetime.now()
-            
-            # --- 1. EXTRACCIÓN SEGURA (BLINDAJE) ---
-            # Usamos float() para asegurar que la BD reciba números, no texto
+
             length_cm = float(metrics.get('length_cm', 0))
             height_cm = float(metrics.get('height_cm', 0))
             width_cm = float(metrics.get('width_cm', 0))
@@ -2415,7 +2415,6 @@ class MainWindow(QMainWindow):
             confidence = float(self.last_result.get('confidence', 0))
 
             # --- 2. PREPARAR IMAGEN ---
-            # Generar nombre de archivo único
             filename = f"AUTO_{timestamp.strftime('%Y%m%d_%H%M%S')}_L{length_cm:.1f}.jpg"
             filepath = os.path.join(Config.IMAGES_AUTO_DIR, filename)
             os.makedirs(Config.IMAGES_AUTO_DIR, exist_ok=True)
@@ -2424,7 +2423,7 @@ class MainWindow(QMainWindow):
             frame_left = self.last_result['frame_left'].copy()
             frame_top = self.last_result['frame_top'].copy()
             
-            # --- 3. DIBUJAR CONTORNOS (TU CÓDIGO ORIGINAL RESTAURADO) ---
+            # --- 3. DIBUJAR CONTORNOS ---
             contour_left = self.last_result.get('contour_left')
             contour_top = self.last_result.get('contour_top')
             
@@ -2450,7 +2449,7 @@ class MainWindow(QMainWindow):
             font = cv2.FONT_HERSHEY_SIMPLEX
             cv2.putText(combined, f"AUTO-CAPTURA", (10, 30), font, 0.9, (0, 255, 255), 2)
             cv2.putText(combined, f"Longitud: {length_cm:.2f} cm", (10, 65), font, 0.8, (0, 255, 0), 2)
-            cv2.putText(combined, f"Altura: {height_cm:.2f} cm", (10, 100), font, 0.8, (0, 255, 0), 2) # Corregí posición Y para que no se superponga
+            cv2.putText(combined, f"Altura: {height_cm:.2f} cm", (10, 100), font, 0.8, (0, 255, 0), 2) 
             cv2.putText(combined, f"Ancho: {width_cm:.2f} cm", (10, 135), font, 0.8, (0, 255, 0), 2)
             cv2.putText(combined, f"Peso: {weight_g:.1f} g", (10, 170), font, 0.8, (0, 255, 0), 2)
             cv2.putText(combined, f"K: {factor_k:.2f} | Conf: {confidence:.0%}", (10, 205), font, 0.8, (0, 255, 0), 2)
@@ -2458,16 +2457,21 @@ class MainWindow(QMainWindow):
             
             # Guardar en disco
             cv2.imwrite(filepath, combined)
-            
-            # --- 5. PREPARAR DICCIONARIO BASE DE DATOS (ESTRUCTURA CORRECTA) ---
+
+            try:
+                api_data = SensorService.get_water_quality_data()
+            except Exception as e_sensor:
+                logger.warning(f"⚠️ Sensor no responde, usando datos vacíos: {e_sensor}")
+                api_data = {}
+                
             try:
                 count_today = self.db.get_today_measurements_count()
                 fish_id = f"AUTO_{str(count_today + 1)  }"
-                logger.info(f"Using daily counter for fish_id: {fish_id}")
+                logger.info(f"Usando el contador diario para fish_id: {fish_id}")
             except:
                 fish_id = f"AUTO_{timestamp.strftime('%Y%m%d_%H%M%S')}"
-                logger.warning(f"Daily counter failed, using timestamp: {fish_id}")
-            
+                logger.warning(f"Error en el contador diario al utilizar la marca de tiempo: {fish_id}")
+                
             data = {
                 'timestamp': timestamp.isoformat(),
                 'fish_id': str(fish_id),
@@ -2478,7 +2482,7 @@ class MainWindow(QMainWindow):
                 'width_cm': width_cm,
                 'weight_g': weight_g,
                 
-                # Datos Manuales (En auto se ponen en 0.0 para que la BD no falle)
+                # Datos Manuales
                 'manual_length_cm': 0.0,
                 'manual_height_cm': 0.0,
                 'manual_width_cm': 0.0,
@@ -2494,18 +2498,9 @@ class MainWindow(QMainWindow):
                 'measurement_type': 'auto',
                 'notes': '[Medición Automática]',
                 'validation_errors': '',
-                
-                # Datos API (Nulos explícitos)
-                'api_air_temp_c': None,
-                'api_water_temp_c': None,
-                'api_rel_humidity': None,
-                'api_abs_humidity_g_m3': None,
-                'api_ph': None,
-                'api_cond_us_cm': None,
-                'api_do_mg_l': None
+
             }
-            
-            # --- 6. GUARDAR Y ACTUALIZAR ---
+            data.update(api_data)
             measurement_id = self.db.save_measurement(data)
             
             self.btn_save.setEnabled(False)
@@ -2520,7 +2515,8 @@ class MainWindow(QMainWindow):
             return True
             
         except Exception as e:
-            logger.error(f"Error silent save: {e}")
+            logger.error(f"FALLO en guardado automático: {e}")
+            QTimer.singleShot(100, self.unlock_after_save) 
             return False
         
     def generate_daily_id(self):
@@ -2559,9 +2555,6 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 1. BARRA DE ACCIONES SUPERIOR (CRUD)
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         top_controls = QHBoxLayout()
         
         # Título de Sección
@@ -2605,15 +2598,10 @@ class MainWindow(QMainWindow):
         
         layout.addLayout(top_controls)
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 2. PANEL DE BÚSQUEDA AVANZADA
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         filter_group = QGroupBox("Filtros de Búsqueda")
         filter_layout = QGridLayout(filter_group)
         filter_layout.setSpacing(10)
 
-        # --- Fila 1: Búsqueda de Texto y Tipo ---
-        
         # Buscador
         filter_layout.addWidget(QLabel("Texto (ID, Pez, Notas):"), 0, 0)
         self.txt_search = QLineEdit()
@@ -2641,8 +2629,6 @@ class MainWindow(QMainWindow):
         )
         self.combo_filter_type.currentTextChanged.connect(self.reset_pagination_and_refresh)
         filter_layout.addWidget(self.combo_filter_type, 0, 3)
-
-        # --- Fila 2: Fechas y Botones ---
         
         # Fecha Desde
         filter_layout.addWidget(QLabel("Desde:"), 1, 0)
@@ -2689,9 +2675,6 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(filter_group)
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 3. TABLA PROFESIONAL
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         self.table_history = QTableWidget()
         self.table_history.setColumnCount(11)
         self.table_history.setHorizontalHeaderLabels([
@@ -2713,9 +2696,6 @@ class MainWindow(QMainWindow):
         self.table_history.cellDoubleClicked.connect(self.view_measurement_image)
         layout.addWidget(self.table_history)
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 4. BARRA DE PAGINACIÓN (ABAJO)
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         pagination_layout = QHBoxLayout()
         
         self.lbl_total_records = QLabel("Total: 0 registros")
@@ -2734,7 +2714,6 @@ class MainWindow(QMainWindow):
         
         pagination_layout.addSpacing(20)
 
-        # --- BOTÓN ANTERIOR (CON ICONO NATIVO) ---
         self.btn_prev_page = QPushButton() 
         self.btn_prev_page.setFixedSize(30, 30)
         self.btn_prev_page.setProperty("class", "secondary")
@@ -2748,14 +2727,12 @@ class MainWindow(QMainWindow):
         self.btn_prev_page.clicked.connect(self.prev_page)
         pagination_layout.addWidget(self.btn_prev_page)
 
-        # --- INFORMACIÓN DE PÁGINA ---
         self.lbl_page_info = QLabel("1")
         self.lbl_page_info.setAlignment(Qt.AlignCenter)
         self.lbl_page_info.setFixedWidth(30)
         self.lbl_page_info.setProperty("class", "report-text")
         pagination_layout.addWidget(self.lbl_page_info)
 
-        # --- BOTÓN SIGUIENTE (CON ICONO NATIVO) ---
         self.btn_next_page = QPushButton() 
         self.btn_next_page.setFixedSize(30, 30)
         self.btn_next_page.setProperty("class", "secondary")
@@ -2819,7 +2796,6 @@ class MainWindow(QMainWindow):
         if not hasattr(self, 'current_page_offset'):
             self.current_page_offset = 0
 
-
         search_text = self.txt_search.text().strip()
         
         filter_type = self.combo_filter_type.currentText()
@@ -2835,7 +2811,6 @@ class MainWindow(QMainWindow):
         except:
             limit = 25
 
-        # 2. Obtener datos (Vienen en el orden de MEASUREMENT_COLUMNS)
         measurements = self.db.get_filtered_measurements(
             limit=limit, 
             offset=self.current_page_offset,
@@ -2854,17 +2829,8 @@ class MainWindow(QMainWindow):
 
         self.table_history.setRowCount(len(measurements))
         
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # MAPA DE INDICES (Basado estrictamente en tu DatabaseManager.py)
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 0:id, 1:timestamp, 2:fish_id, 3:length_cm, 4:height_cm, 5:width_cm, 6:weight_g
-        # 7:manual_length, 8:manual_height, 9:manual_width, 10:manual_weight
-        # 14:confidence, 15:notes, 16:image_path, 17:measurement_type
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        
         for row, m in enumerate(measurements):
             
-            # --- FUNCIÓN SEGURA INTERNA ---
             def get_safe(idx, default=""):
                 try:
                     val = m[idx]
@@ -2872,14 +2838,11 @@ class MainWindow(QMainWindow):
                 except IndexError:
                     return default
 
-            # 1. ID (Columna 0) -> Index 0
             val_id = get_safe(0, 0)
             self.table_history.setItem(row, 0, QTableWidgetItem(str(val_id)))
             
-            # 2. FECHA (Columna 1) -> Index 1
             ts_str = str(get_safe(1, ""))
             try:
-                # Cortar microsegundos si existen para que se vea limpio
                 if "." in ts_str: ts_str = ts_str.split(".")[0] 
                 ts_obj = datetime.fromisoformat(ts_str)
                 ts_nice = ts_obj.strftime('%d/%m/%Y %H:%M')
@@ -2887,56 +2850,45 @@ class MainWindow(QMainWindow):
                 ts_nice = ts_str
             self.table_history.setItem(row, 1, QTableWidgetItem(ts_nice))
             
-            # 3. TIPO (Columna 2) -> Index 17 (¡AQUÍ ESTABA EL ERROR!)
             val_type = str(get_safe(17, "auto")).upper()
             item_type = QTableWidgetItem(val_type)
             
             # Colores
             if "MANUAL" in val_type:
-                item_type.setBackground(QColor("#fff3cd")) # Amarillo
+                item_type.setBackground(QColor("#fff3cd")) 
                 item_type.setForeground(QColor("#856404"))
             elif "IA" in val_type:
-                item_type.setBackground(QColor("#d4edda")) # Verde
+                item_type.setBackground(QColor("#d4edda"))
                 item_type.setForeground(QColor("#155724"))
             else:
-                item_type.setBackground(QColor("#e7f1ff")) # Azul
-            
+                item_type.setBackground(QColor("#e7f1ff")) 
             self.table_history.setItem(row, 2, item_type)
             
-            # 4. PEZ ID (Columna 3) -> Index 2
             val_fish = str(get_safe(2, "-"))
             self.table_history.setItem(row, 3, QTableWidgetItem(val_fish))
             
-            # --- VALORES NUMÉRICOS ---
             def format_num(idx, decimals=2):
                 try:
                     val = float(get_safe(idx, 0))
                     return f"{val:.{decimals}f}"
                 except: return "0.00"
 
-            # 5. LARGO (Columna 4) -> Index 3 (length_cm)
             self.table_history.setItem(row, 4, QTableWidgetItem(format_num(3)))
             
-            # 6. ALTO (Columna 5) -> Index 8 (manual_height) o Index 4 (height_cm)
-            # Priorizamos manual si existe (>0), si no usamos el de IA
             h_manual = float(get_safe(8, 0))
             h_ia = float(get_safe(4, 0))
             val_h = h_manual if h_manual > 0 else h_ia
             self.table_history.setItem(row, 5, QTableWidgetItem(f"{val_h:.2f}"))
             
-            # 7. ANCHO (Columna 6) -> Index 9 (manual_width) o Index 5 (width_cm)
             w_manual = float(get_safe(9, 0))
             w_ia = float(get_safe(5, 0))
             val_w = w_manual if w_manual > 0 else w_ia
             self.table_history.setItem(row, 6, QTableWidgetItem(f"{val_w:.2f}"))
             
-            # 8. PESO (Columna 7) -> Index 6 (weight_g)
-            # Nota: Si usas peso manual está en index 10, pero usualmente mostramos el principal
             weight_val = float(get_safe(6, 0))
             self.table_history.setItem(row, 7, QTableWidgetItem(f"{weight_val:.2f}"))
             
-            # 9. FACTOR K (Columna 8) -> Calculado
-            l_val = float(get_safe(3, 0)) # Usamos largo IA para estandarizar
+            l_val = float(get_safe(3, 0)) 
             if l_val > 0 and weight_val > 0:
                 k = (100 * weight_val) / (l_val ** 3)
                 k_str = f"{k:.3f}"
@@ -2944,7 +2896,6 @@ class MainWindow(QMainWindow):
                 k_str = "-"
             self.table_history.setItem(row, 8, QTableWidgetItem(k_str))
             
-            # 10. CONFIANZA (Columna 9) -> Index 14
             conf = float(get_safe(14, 0))
             item_conf = QTableWidgetItem(f"{conf:.0%}")
             if conf < 0.85 and conf > 0:
@@ -2952,11 +2903,9 @@ class MainWindow(QMainWindow):
                 item_conf.setFont(QFont("Segoe UI", 9, QFont.Bold))
             self.table_history.setItem(row, 9, item_conf)
             
-            # 11. NOTAS (Columna 10) -> Index 15
             val_notes = str(get_safe(15, ""))
             self.table_history.setItem(row, 10, QTableWidgetItem(val_notes))
 
-        # 3. Paginación UI
         limit = int(self.combo_limit.currentText())
         current_page = (self.current_page_offset // limit) + 1
         self.lbl_page_info.setText(str(current_page))
@@ -2994,7 +2943,6 @@ class MainWindow(QMainWindow):
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         
-        # --- LADO IZQUIERDO: GALERÍA ---
         left_container = QWidget()
         left_layout = QVBoxLayout(left_container)
         left_layout.setContentsMargins(0,0,0,0)
@@ -3011,7 +2959,6 @@ class MainWindow(QMainWindow):
         self.gallery_list.itemDoubleClicked.connect(self.open_enlarged_graph)
         left_layout.addWidget(self.gallery_list)
         
-        # --- LADO DERECHO: REPORTE TEXTUAL ---
         right_container = QWidget()
         right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(0,0,0,0)
@@ -3076,7 +3023,6 @@ class MainWindow(QMainWindow):
         tools_layout = QVBoxLayout(grp_tools)
         tools_layout.setSpacing(8)
         
-        # Botón CSV
         btn_csv = QPushButton("Exportar CSV (Excel)")
         btn_csv.setProperty("class", "success") 
         btn_csv.style().unpolish(btn_csv)
@@ -3133,8 +3079,7 @@ class MainWindow(QMainWindow):
     
     def open_output_folder(self):
         """Abre la carpeta de resultados en el explorador del sistema"""
-        import platform
-        import subprocess
+
         
         path = os.path.abspath(Config.OUT_DIR)
         if not os.path.exists(path):
@@ -3249,25 +3194,15 @@ class MainWindow(QMainWindow):
             return
         
         try:
-            import matplotlib.pyplot as plt
-            import matplotlib.dates as mdates
-            import numpy as np
-            from datetime import datetime
-            import os
-            import sqlite3
-            from BasedeDatos.DatabaseManager import MEASUREMENT_COLUMNS
-            
-            # --- RESET TOTAL DE ESTILOS ---
+
             plt.close('all')
-            plt.rcParams.update(plt.rcParamsDefault) # Restablece todo a valores de fábrica
-            plt.style.use('default')                 # Fuerza el estilo por defecto (blanco)
+            plt.rcParams.update(plt.rcParamsDefault) 
+            plt.style.use('default')                
             
-            # Colores forzados para reporte
             TEXT_COLOR = 'black'
             GRID_COLOR = '#cccccc'
             BG_COLOR = 'white'
             
-            # --- DETECCIÓN DE COLUMNAS ---
             columns_info = {col: i for i, col in enumerate(MEASUREMENT_COLUMNS)}
             
             def get_val(m, field, default=0.0):
@@ -3287,7 +3222,6 @@ class MainWindow(QMainWindow):
                         return str(m[idx]) if m[idx] is not None else ""
                 return ""
 
-            # Crear figura con fondo blanco explícito
             fig, ax = plt.subplots(figsize=(10, 6), dpi=100)
             fig.patch.set_facecolor(BG_COLOR)
             ax.set_facecolor(BG_COLOR)
@@ -3393,7 +3327,6 @@ class MainWindow(QMainWindow):
                     filename = f'timeline_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
                     has_data = True
 
-            # --- CONFIGURACIÓN FINAL DE EJES ---
             ax.tick_params(axis='x', colors=TEXT_COLOR)
             ax.tick_params(axis='y', colors=TEXT_COLOR)
             ax.spines['bottom'].set_color(TEXT_COLOR)
@@ -3433,58 +3366,43 @@ class MainWindow(QMainWindow):
 
     def apply_animations(self, mode: str):
         """
-        Configura animaciones VISIBLES usando QPropertyAnimation (Qt nativo).
+        Configura animaciones VISIBLES.
         """
         app = QApplication.instance()
         
-        # 1. Efectos de sistema básicos
         enabled = mode != "Desactivadas"
-        app.setEffectEnabled(Qt.UI_AnimateCombo, enabled)
+        app.setEffectEnabled(Qt.UI_AnimateCombo, False) 
         app.setEffectEnabled(Qt.UI_AnimateTooltip, enabled)
         app.setEffectEnabled(Qt.UI_FadeMenu, enabled)
         app.setEffectEnabled(Qt.UI_FadeTooltip, enabled)
         
-        # 2. Duración global de animaciones
         if mode == "Desactivadas":
             self.anim_duration = 0
         elif mode == "Normales":
             self.anim_duration = 150
-        else:  # Suaves
+        else: 
             self.anim_duration = 300
         
-        # 3. ✅ APLICAR ANIMACIONES PROGRAMÁTICAS
         if enabled:
             self._setup_button_animations()
             self._setup_widget_effects()
         
         logger.info(f"✨ Animaciones: {mode} ({self.anim_duration}ms)")
-        
-        if hasattr(self, 'status_bar'):
-            status_map = {
-                "Desactivadas": "❌ SIN animaciones",
-                "Normales": "⚡ Animaciones RÁPIDAS",
-                "Suaves": "🌊 Animaciones SUAVES"
-            }
-            self.status_bar.set_status(f"🎨 {status_map[mode]}", "info")
 
     def _setup_button_animations(self):
         """
         Aplica efecto visual de "pulso" a botones importantes.
         Compatible con PyQt/PySide - NO usa CSS3.
         """
-        from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QSequentialAnimationGroup, QParallelAnimationGroup
-        from PySide6.QtWidgets import QGraphicsOpacityEffect
-        
-        # Lista de botones críticos
+
         critical_buttons = []
         
-        # Recopilar todos los botones que tengan clase CSS
         for btn in self.findChildren(QPushButton):
             btn_class = btn.property("class")
             if btn_class in ["primary", "success", "warning", "info"]:
                 critical_buttons.append(btn)
         
-        logger.debug(f"Configurando animaciones en {len(critical_buttons)} botones")
+        logger.debug(f"Configurando animaciones en {len(critical_buttons)} botones.")
         
         for btn in critical_buttons:
             # Evitar duplicar si ya tiene animación
@@ -3495,21 +3413,16 @@ class MainWindow(QMainWindow):
             btn._original_press = btn.mousePressEvent
             btn._original_release = btn.mouseReleaseEvent
             
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            # ANIMACIÓN 1: Efecto de "Brillo" al hacer clic
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             def create_press_handler(button):
                 def on_press(event):
                     if self.anim_duration == 0:
                         button._original_press(event)
                         return
                     
-                    # Crear efecto de opacidad
                     if not hasattr(button, '_opacity_effect'):
                         button._opacity_effect = QGraphicsOpacityEffect()
                         button.setGraphicsEffect(button._opacity_effect)
                     
-                    # Animación: Bajar opacidad
                     anim = QPropertyAnimation(button._opacity_effect, b"opacity")
                     anim.setDuration(self.anim_duration // 2)
                     anim.setStartValue(1.0)
@@ -3517,7 +3430,7 @@ class MainWindow(QMainWindow):
                     anim.setEasingCurve(QEasingCurve.OutCubic)
                     anim.start()
                     
-                    button._press_anim = anim  # Guardar referencia
+                    button._press_anim = anim  
                     button._original_press(event)
                 
                 return on_press
@@ -3528,7 +3441,6 @@ class MainWindow(QMainWindow):
                         button._original_release(event)
                         return
                     
-                    # Animación: Restaurar opacidad
                     if hasattr(button, '_opacity_effect'):
                         anim = QPropertyAnimation(button._opacity_effect, b"opacity")
                         anim.setDuration(self.anim_duration)
@@ -3547,71 +3459,12 @@ class MainWindow(QMainWindow):
 
     def _setup_widget_effects(self):
         """
-        Efectos visuales en widgets especiales (tabs, progress bars, etc.)
+        Efectos visuales en widgets especiales.
         """
-        from PySide6.QtCore import QPropertyAnimation, QEasingCurve
-        from PySide6.QtWidgets import QGraphicsOpacityEffect
-        
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # ANIMACIÓN 1: Fade entre pestañas
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        if hasattr(self, 'tabs') and not hasattr(self.tabs, '_fade_setup'):
-            def animate_tab_change(index):
-                if self.anim_duration == 0:
-                    return
-                
-                widget = self.tabs.widget(index)
-                if widget:
-                    # Crear efecto de opacidad
-                    if not hasattr(widget, '_opacity_effect'):
-                        widget._opacity_effect = QGraphicsOpacityEffect()
-                        widget.setGraphicsEffect(widget._opacity_effect)
-                    
-                    # Fade in
-                    anim = QPropertyAnimation(widget._opacity_effect, b"opacity")
-                    anim.setDuration(self.anim_duration)
-                    anim.setStartValue(0.0)
-                    anim.setEndValue(1.0)
-                    anim.setEasingCurve(QEasingCurve.InOutQuad)
-                    anim.start()
-                    
-                    # Guardar para evitar garbage collection
-                    widget._fade_anim = anim
-            
-            self.tabs.currentChanged.connect(animate_tab_change)
-            self.tabs._fade_setup = True
-        
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # ANIMACIÓN 2: Hover en botones secundarios
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         for btn in self.findChildren(QPushButton):
             if btn.property("class") == "secondary" and not hasattr(btn, '_hover_setup'):
                 btn._original_enter = btn.enterEvent
                 btn._original_leave = btn.leaveEvent
-                
-                def create_hover_enter(button):
-                    def on_enter(event):
-                        if self.anim_duration > 0:
-                            # Crear animación de tamaño (sutil)
-                            button.setStyleSheet(button.styleSheet() + """
-                                QPushButton { font-size: 1.05em; }
-                            """)
-                        button._original_enter(event)
-                    return on_enter
-                
-                def create_hover_leave(button):
-                    def on_leave(event):
-                        if self.anim_duration > 0:
-                            # Restaurar
-                            button.setStyleSheet(button.styleSheet().replace(
-                                "font-size: 1.05em;", ""
-                            ))
-                        button._original_leave(event)
-                    return on_leave
-                
-                btn.enterEvent = create_hover_enter(btn)
-                btn.leaveEvent = create_hover_leave(btn)
-                btn._hover_setup = True
 
     def apply_appearance(self):
         """Lee los valores de los widgets y sincroniza el motor de estilos"""
@@ -3621,13 +3474,11 @@ class MainWindow(QMainWindow):
             density = self.combo_density.currentText()
             animations = self.combo_animations.currentText()
 
-            # ✅ FORZAR ACTUALIZACIÓN: Llamamos a toggle_theme que reconstruye TODO el CSS
             self.toggle_theme(theme, font_size, density)
 
             self.apply_animations(animations)
     
             if hasattr(self, 'status_bar'):
-                # ✅ Indicador visual de si el alto contraste está activo
                 anim_status = {
                 "Desactivadas": "❌ SIN animaciones",
                 "Normales": "⚡ Animaciones NORMALES (150ms)",
@@ -3640,7 +3491,7 @@ class MainWindow(QMainWindow):
                 )
                 
         except Exception as e:
-            logger.error(f"Error aplicando configuración visual: {e}")
+            logger.error(f"Error aplicando configuracion visual: {e}.")
 
     def toggle_theme(self, text, font_size=11, density="Normal"):
         """
@@ -4006,13 +3857,7 @@ class MainWindow(QMainWindow):
         Se ejecuta después de cambiar el modo de animación.
         """
         if not enabled:
-            return  # Si están desactivadas, no hacemos nada
-        
-        from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QAbstractAnimation
-        
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # ANIMACIÓN 1: Botones principales (Feedback visual al hacer clic)
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            return  
         primary_buttons = [
             self.btn_capture,
             self.btn_save,
@@ -4025,12 +3870,11 @@ class MainWindow(QMainWindow):
                 btn._original_click = btn.mousePressEvent
                 
                 def animated_click(event, button=btn):
-                    # Animación de "presión"
                     anim = QPropertyAnimation(button, b"geometry")
-                    anim.setDuration(duration // 3)  # Rápido
+                    anim.setDuration(duration // 3)  
                     
                     original_geo = button.geometry()
-                    pressed_geo = original_geo.adjusted(2, 2, -2, -2)  # Reducir 2px
+                    pressed_geo = original_geo.adjusted(2, 2, -2, -2)  
                     
                     anim.setStartValue(original_geo)
                     anim.setEndValue(pressed_geo)
@@ -4052,14 +3896,10 @@ class MainWindow(QMainWindow):
                 btn.mousePressEvent = animated_click
                 btn._animation_setup = True
         
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # ANIMACIÓN 2: Tabs (Desplazamiento suave al cambiar)
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         if hasattr(self, 'tabs') and not hasattr(self.tabs, '_animation_setup'):
             self.tabs._original_tab_change = self.tabs.currentChanged
             
             def animated_tab_change(index):
-                # Crear animación de fade
                 fade_widget = self.tabs.currentWidget()
                 if fade_widget:
                     fade_anim = QPropertyAnimation(fade_widget, b"windowOpacity")
@@ -4074,19 +3914,11 @@ class MainWindow(QMainWindow):
             self.tabs.currentChanged.disconnect()
             self.tabs.currentChanged.connect(animated_tab_change)
             self.tabs._animation_setup = True
-        
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # ANIMACIÓN 3: Barra de confianza (Animación suave existente mejorada)
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
         if hasattr(self, 'confidence_bar'):
-            # Ya tienes _animate_confidence, pero podemos mejorarla
-            # La velocidad se adapta según self.anim_duration
-            pass  # Tu código actual ya está bien
+            pass  
         
-        logger.debug(f"Animaciones aplicadas a {len(primary_buttons)} botones y widgets críticos")        
-    
-    
-    
+        logger.debug(f"Animaciones aplicadas a {len(primary_buttons)} botones y widgets criticos")        
     
         
     def create_settings_tab(self):
@@ -4096,9 +3928,6 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
-        # ---------------------------------------------
-        # APARIENCIA
-        # ---------------------------------------------
         appearance_group = QGroupBox("Apariencia")
         appearance_layout = QHBoxLayout(appearance_group)
 
@@ -4126,7 +3955,7 @@ class MainWindow(QMainWindow):
         appearance_layout.addWidget(QLabel("Fuente:"))
         self.combo_font_size = QComboBox()
         self.combo_font_size.setCursor(Qt.PointingHandCursor)
-        self.combo_font_size.addItems(["6", "8", "10", "11", "12", "14", "16"])
+        self.combo_font_size.addItems(["6", "8", "10", "11", "12", "14", "16", "18"])
         self.combo_font_size.setToolTip(
             "Ajusta el tamaño del texto en toda la interfaz."
         )
@@ -4166,9 +3995,6 @@ class MainWindow(QMainWindow):
             w.blockSignals(False)
             w.currentTextChanged.connect(self.apply_appearance)
 
-        # ---------------------------------------------
-        # 2. CÁMARAS
-        # ---------------------------------------------
         eng_group = QGroupBox("Hardware")
         eng_layout = QGridLayout(eng_group)
         eng_layout.setSpacing(10)
@@ -4201,9 +4027,6 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(eng_group)
         
-        # =============================================
-        # 3. CALIBRACIÓN DE ESCALAS (Tu código integrado)
-        # =============================================
         manual_group = QGroupBox("Calibración de Escalas (cm/px)")
         manual_group.setToolTip("Define cuántos centímetros reales equivale 1 píxel en pantalla.")
         manual_layout = QGridLayout(manual_group)
@@ -4272,27 +4095,12 @@ class MainWindow(QMainWindow):
         btn_apply_manual.setCursor(Qt.PointingHandCursor)
         btn_apply_manual.setToolTip("Aplica estos valores de escala inmediatamente.")
         btn_apply_manual.clicked.connect(self.apply_manual_calibration)
-        calib_btn_layout.addWidget(btn_apply_manual, 4.5)
-        
-        btn_calibraty = QPushButton("Calibrar")
-        btn_calibraty.setProperty("class", "empty")   #arreglar   info
-        btn_calibraty.style().unpolish(btn_calibraty) 
-        btn_calibraty.style().polish(btn_calibraty)
-        btn_calibraty.setCursor(Qt.PointingHandCursor)
-        btn_calibraty.setToolTip("SOON...")
-        #btn_calibraty.setToolTip("Abre la aplicación de calibración de escalas.")
-        btn_calibraty.clicked.connect(self.open_live_calibration)
-        calib_btn_layout.addWidget(btn_calibraty, 0.5)
-        btn_calibraty.setEnabled(False) #arreglar
+        calib_btn_layout.addWidget(btn_apply_manual, 5)
         
         manual_layout.addLayout(calib_btn_layout, 3, 0, 1, 3) 
         
         layout.addWidget(manual_group)
         
-    
-        # ---------------------------------------------
-        # 4. DETECCIÓN 
-        # ---------------------------------------------
         detection_group = QGroupBox("Parámetros de Detección (Filtros)")
         detection_layout = QGridLayout(detection_group)
         
@@ -4302,7 +4110,6 @@ class MainWindow(QMainWindow):
         self.spin_min_area.setRange(10, 10000)
         self.spin_min_area.setValue(Config.MIN_CONTOUR_AREA)
         self.spin_min_area.setSuffix(" px")
-        # Tooltip
         self.spin_min_area.setToolTip(
             "Ignora objetos más pequeños que este valor (en píxeles).\n"
             "Aumente este valor para filtrar ruido, burbujas o suciedad pequeña."
@@ -4315,7 +4122,6 @@ class MainWindow(QMainWindow):
         self.spin_max_area.setRange(1000, 1000000)
         self.spin_max_area.setValue(Config.MAX_CONTOUR_AREA)
         self.spin_max_area.setSuffix(" px")
-        # Tooltip
         self.spin_max_area.setToolTip(
             "Ignora objetos más grandes que este valor.\n"
             "Útil para evitar detectar la mano del operario o reflejos grandes."
@@ -4329,18 +4135,13 @@ class MainWindow(QMainWindow):
         self.spin_confidence.setValue(Config.CONFIDENCE_THRESHOLD)
         self.spin_confidence.setDecimals(2)
         self.spin_confidence.setSingleStep(0.05)
-        # Tooltip
         self.spin_confidence.setToolTip(
             "Nivel de certeza requerido para considerar válida una detección."
         )
         detection_layout.addWidget(self.spin_confidence, 2, 1)
         
         layout.addWidget(detection_group)
-        
-        
-        # ---------------------------------------------
-        # 5. VALIDACIÓN BIOLÓGICA
-        # ---------------------------------------------
+
         validation_group = QGroupBox("Parámetros de Validación (Medidas Reales)")
         validation_layout = QGridLayout(validation_group)
         
@@ -4350,7 +4151,6 @@ class MainWindow(QMainWindow):
         self.spin_min_length.setRange(0.1, 100.0)
         self.spin_min_length.setValue(Config.MIN_LENGTH_CM)
         self.spin_min_length.setSuffix(" cm")
-        # Tooltip
         self.spin_min_length.setToolTip(
             "Medida mínima aceptable en centímetros."
         )
@@ -4362,24 +4162,17 @@ class MainWindow(QMainWindow):
         self.spin_max_length.setRange(1.0, 200.0)
         self.spin_max_length.setValue(Config.MAX_LENGTH_CM)
         self.spin_max_length.setSuffix(" cm")
-        # Tooltip
         self.spin_max_length.setToolTip(
             "Medida máxima aceptable en centímetros."
         )
         validation_layout.addWidget(self.spin_max_length, 1, 1)
         
         layout.addWidget(validation_group)
-        
-        # ---------------------------------------------
-        # 6. CHROMA KEY (HSV)
-        # ---------------------------------------------
 
         chroma_group = QGroupBox("Calibración de Color (Chroma Key)")
         chroma_group.setToolTip("Ajuste los rangos HSV para aislar el fondo de cada cámara.")
         chroma_layout = QVBoxLayout(chroma_group)
 
-        # Usamos un TabWidget o un Splitter interno si quieres ahorrar espacio, 
-        # pero para el laboratorio lo mejor es tenerlo a la vista:
         hsv_container = QHBoxLayout()
 
         # --- PANEL CÁMARA LATERAL ---
@@ -4419,9 +4212,6 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(chroma_group)
 
-        # ---------------------------------------------
-        # 7. GUARDAR
-        # ---------------------------------------------
         btn_save_config = QPushButton("Guardar Configuración")
         btn_save_config.setProperty("class", "primary")
         btn_save_config.style().unpolish(btn_save_config)
@@ -4453,62 +4243,7 @@ class MainWindow(QMainWindow):
         sb.setRange(0.000001, 1.0)
         sb.setSingleStep(0.0001)
         return sb
-    
-    def open_live_calibration(self):
-        from Herramientas.ScaleMedition import CalibradorEscalaVivo
 
-        opciones = [
-            "Cámara Lateral - Frente",
-            "Cámara Lateral - Fondo",
-            "Cámara Cenital - Frente",
-            "Cámara Cenital - Fondo"
-        ]
-
-        seleccion, ok = QInputDialog.getItem(
-            self, "Seleccionar Calibración",
-            "¿Qué plano desea calibrar ahora?",
-            opciones, 0, False
-        )
-        if not ok:
-            return
-
-        if "Lateral" in seleccion:
-            cam_index = self.spin_cam_left.value()
-            target_spin = self.spin_scale_front_left if "Frente" in seleccion else self.spin_scale_back_left
-        else:
-            cam_index = self.spin_cam_top.value()
-            target_spin = self.spin_scale_front_top if "Frente" in seleccion else self.spin_scale_back_top
-
-        try:
-            self.status_bar.set_status(f"📏 Calibrando {seleccion}...", "info")
-
-            calibrador = CalibradorEscalaVivo(camara_index=cam_index)
-            escala = calibrador.calibrar_en_vivo(
-                camara_index=cam_index,
-                cm_reales=10.0
-            )
-
-            if escala is None:
-                self.status_bar.set_status("⚠️ Calibración cancelada", "warning")
-                return
-
-            target_spin.setValue(escala)
-            target_spin.setProperty("state", "success")
-            target_spin.style().polish(target_spin)
-
-            QMessageBox.information(
-                self, "Calibración Exitosa",
-                f"{seleccion}\nNueva escala: {escala:.6f} cm/px"
-            )
-
-        except Exception as e:
-            logger.exception("Error en calibración en vivo")
-            QMessageBox.critical(
-                self, "Error de Hardware",
-                f"No se pudo acceder a la cámara {cam_index}"
-            )
-
-    
     def load_default_calibration(self):
         """Carga los valores de calibración predeterminados de fábrica"""
 
@@ -4560,7 +4295,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(2000, lambda: self._clear_scales_highlight(widgets))
 
         except Exception as e:
-            logger.error(f"Error aplicando calibración: {e}")
+            logger.error(f"Error aplicando calibracion: {e}.")
             self.status_bar.set_status("❌ Error al aplicar escalas", "error")
 
     def _clear_scales_highlight(self, widgets):
@@ -4586,7 +4321,6 @@ class MainWindow(QMainWindow):
         """
         
         try:
-
             self.cap_left = OptimizedCamera(Config.CAM_LEFT_INDEX).start()
             self.cap_top = OptimizedCamera(Config.CAM_TOP_INDEX).start()
             
@@ -4722,47 +4456,41 @@ class MainWindow(QMainWindow):
         if frame is None: return
         
         try:
-            # 1. Dimensiones del contenedor (Label)
+            # 1. Validar dimensiones
             win_w = label.width()
             win_h = label.height()
             if win_w < 10 or win_h < 10: return
 
-            # 2. FORZAR 16:9 (Matemática de Proporción)
+            # 2. Calcular 16:9
             target_aspect = 16 / 9
             
-            # Calculamos el tamaño ideal basado en el espacio disponible
             if win_w / win_h > target_aspect:
-                # El label es muy ancho: ajustamos por la altura
                 new_h = win_h
                 new_w = int(win_h * target_aspect)
             else:
-                # El label es muy alto: ajustamos por la anchura
                 new_w = win_w
                 new_h = int(win_w / target_aspect)
 
-            # 3. Redimensionar el frame de OpenCV
+            # 3. Redimensionar (OpenCV)
             frame_resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
-            # 4. Conversión a QImage (Color o Máscara)
+            # 4. Convertir a QImage
             if is_mask or len(frame_resized.shape) == 2:
                 h, w = frame_resized.shape
-                q_img = QImage(frame_resized.data, w, h, w, QImage.Format.Format_Grayscale8)
+                bytes_per_line = w
+                q_img = QImage(frame_resized.data, w, h, bytes_per_line, QImage.Format.Format_Grayscale8)
             else:
                 frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
                 h, w, ch = frame_rgb.shape
-                q_img = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+                bytes_per_line = ch * w
+                q_img = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
 
-            # 5. Mostrar y Centrar
+            # 5. Mostrar (SOLO setPixmap)
             pixmap = QPixmap.fromImage(q_img)
-
-            label.setUpdatesEnabled(False)
             label.setPixmap(pixmap)
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setUpdatesEnabled(True)
 
         except Exception as e:
-            logger.error(f"Error en display_frame: {e}")
-            
+            logger.error(f"Error en display_frame: {e}")  
             
     def update_cache(self):
         """Actualiza la caché de parámetros para el motor de visión"""
@@ -4962,11 +4690,7 @@ class MainWindow(QMainWindow):
             return
         
         try:
-            import matplotlib.pyplot as plt
-            import matplotlib.dates as mdates
-            import numpy as np
-            from BasedeDatos.DatabaseManager import MEASUREMENT_COLUMNS
-            
+           
             # --- CORRECCIÓN DE ESTILO ---
             # Forzamos estilo 'default' o 'seaborn' para que el PNG salga con fondo blanco
             # ideal para documentos, independiente de si la app está en modo oscuro.
@@ -5118,7 +4842,6 @@ class MainWindow(QMainWindow):
         """
         # 1. Preparar ruta de guardado
         try:
-            from Config import Config
             report_dir = getattr(Config, 'CSV_DIR', os.path.join("Resultados", "CSV"))
         except:
             report_dir = os.path.join("Resultados", "CSV")
@@ -5135,8 +4858,6 @@ class MainWindow(QMainWindow):
         
         conn = None
         try:
-            import csv
-            import sqlite3
             
             # 2. CONEXIÓN DIRECTA A LA BASE DE DATOS
             conn = sqlite3.connect(self.db.db_path)
@@ -5228,7 +4949,6 @@ class MainWindow(QMainWindow):
         """
         # 1. Configurar directorio de reportes (ANTES del diálogo)
         try:
-            from Config import Config
             report_dir = getattr(Config, 'REPORTS_DIR', os.path.join("Resultados", "Reportes"))
         except:
             report_dir = os.path.join("Resultados", "Reportes")
@@ -5256,14 +4976,6 @@ class MainWindow(QMainWindow):
         os.makedirs(temp_plots_dir, exist_ok=True)
 
         try:
-            import matplotlib.pyplot as plt
-            import numpy as np
-            from reportlab.lib.pagesizes import A4
-            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak, Table, TableStyle
-            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-            from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
-            from reportlab.lib import colors
-            from BasedeDatos.DatabaseManager import MEASUREMENT_COLUMNS
                         
             # --- MAPEO SEGURO DE DATOS ---
             col_map = {col: i for i, col in enumerate(MEASUREMENT_COLUMNS)}
@@ -5452,7 +5164,6 @@ class MainWindow(QMainWindow):
             
             # 6. Limpiar archivos temporales DESPUÉS de generar el PDF
             try:
-                import shutil
                 shutil.rmtree(temp_plots_dir)
             except: 
                 pass
@@ -5478,7 +5189,6 @@ class MainWindow(QMainWindow):
         finally:
             # Asegurar limpieza incluso si hay errores
             try:
-                import shutil
                 if os.path.exists(temp_plots_dir):
                     shutil.rmtree(temp_plots_dir)
             except:
@@ -5778,7 +5488,7 @@ class MainWindow(QMainWindow):
         Sincroniza los widgets de la interfaz con las variables cargadas.
         Se debe llamar SOLO DESPUÉS de initUI().
         """
-        logger.info("Sincronizando widgets con la configuración...")
+        logger.info("Sincronizando widgets con la configuracion...")
         
         # Agrupamos widgets para bloquear sus señales temporalmente
         widgets_to_sync = [
@@ -6033,13 +5743,10 @@ class MainWindow(QMainWindow):
                     self.display_frame(mask, lbl_top_mask, is_mask=True)
 
         timer.timeout.connect(update_preview)
-        # 100ms es un balance seguro para evitar el error "Painter not active"
         timer.start(120) 
         
-        # Detener timer al cerrar diálogo (CRUCIAL)
         dialog.finished.connect(timer.stop)
 
-        # 5. Botones de Acción
         btns = QHBoxLayout()
         
         btn_reset = QPushButton("Restaurar Fábrica")
@@ -6080,8 +5787,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'sync_ui_with_config'):
                 self.sync_ui_with_config()
             
-            # Guardar en archivo JSON para persistencia
-            self.save_config() # Asumo que tienes este método o usa tu lógica de json.dump
+            self.save_config() 
             
             timer.stop()
             dialog.accept()

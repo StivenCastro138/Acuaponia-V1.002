@@ -1,10 +1,27 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Editor de Registros (EditMeasurementDialog.py)
+DESCRIPCIÓN: Formulario avanzado para la modificación de datos históricos.
+             Implementa validación en tiempo real (Live Validation) contra modelos
+             alométricos para asistir al usuario en la corrección de errores.
+"""
+
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
                                QLabel, QLineEdit, QDoubleSpinBox, QTextEdit, 
                                QPushButton, QGroupBox, QWidget, QDateTimeEdit)
 from PySide6.QtCore import Qt, QDateTime
+
 from Modulos.MorphometricAnalyzer import MorphometricAnalyzer
 
 class EditMeasurementDialog(QDialog):
+    """
+    Diálogo para auditoría y corrección de datos biométricos.
+    
+    Características:
+    - Mapeo automático de tuplas de base de datos a campos editables.
+    - Retroalimentación visual inmediata sobre la coherencia biológica (Factor K).
+    - Preservación de la integridad referencial (ID inmutable).
+    """
     
     # Mapeo de columnas
     COLUMN_NAMES = [
@@ -34,13 +51,11 @@ class EditMeasurementDialog(QDialog):
     'validation_errors'
 ]
 
-
     def __init__(self, measurement_data, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Editar Registro")
         self.setFixedWidth(500)
         
-        # 1. Normalización de Datos
         if isinstance(measurement_data, (list, tuple)):
             if len(measurement_data) == len(self.COLUMN_NAMES):
                 self.measurement_data = dict(zip(self.COLUMN_NAMES, measurement_data))
@@ -220,6 +235,8 @@ class EditMeasurementDialog(QDialog):
 
         btn_cancel = QPushButton("Cancelar")
         btn_cancel.setProperty("class", "warning")
+        btn_cancel.style().unpolish(btn_cancel)
+        btn_cancel.style().polish(btn_cancel)
         btn_cancel.setCursor(Qt.PointingHandCursor)
         btn_cancel.setToolTip("Cancelar edición del registro actual.")
         btn_cancel.clicked.connect(self.reject)
@@ -227,6 +244,8 @@ class EditMeasurementDialog(QDialog):
 
         btn_save = QPushButton("Guardar Cambios")
         btn_save.setProperty("class", "success")
+        btn_save.style().unpolish(btn_save)
+        btn_save.style().polish(btn_save)
         btn_save.setCursor(Qt.PointingHandCursor)
         btn_save.setToolTip("Guardar los datos actuales en la base de datos.")
         btn_save.clicked.connect(self.accept)
@@ -250,9 +269,7 @@ class EditMeasurementDialog(QDialog):
         if l > 0 and w_input > 0:
             k_real = (100 * w_input) / (l ** 3)
 
-        # --- ACTUALIZAR UI ---
-        
-        # A. Factor K (Semáforo de Salud)
+        # A. Factor K 
         self.lbl_factor_k.setText(f"{k_real:.3f}")
         if 0.9 <= k_real <= 1.5:
             self.lbl_factor_k.setProperty("state", "ok")

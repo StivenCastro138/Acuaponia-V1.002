@@ -1,3 +1,14 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Pasarela de Captura Móvil (Mobile Gateway)
+DESCRIPCIÓN: Servidor web ligero (Flask) que expone una interfaz HTML5 responsiva
+             para permitir la captura remota de imágenes desde dispositivos móviles
+             en la misma red local (LAN).
+             
+INTEGRACIÓN: Actúa como un servicio secundario que alimenta la cola de procesamiento
+             de la aplicación principal.
+"""
+
 from flask import Flask, request, render_template_string, jsonify
 from PIL import Image, ImageDraw, ImageFont
 from queue import Queue, Full
@@ -6,6 +17,7 @@ import time
 import logging
 import socket
 from pathlib import Path
+
 from Config.Config import Config
 
 logger = logging.getLogger(__name__)
@@ -52,14 +64,11 @@ def add_label_to_image(image, label_text):
     img_copy = image.copy()
     draw = ImageDraw.Draw(img_copy)
     
-    # Fondo semitransparente para el texto
     bbox_height = 40
     draw.rectangle([(0, 0), (img_copy.width, bbox_height)], 
                    fill=(0, 0, 0, 180))
     
-    # Texto
     try:
-        # Intentar cargar fuente del sistema
         font = ImageFont.truetype("arial.ttf", 24)
     except:
         font = ImageFont.load_default()
@@ -72,7 +81,7 @@ def cleanup_temp_files(directory, pattern="MOB_"):
     try:
         now = time.time()
         for file in Path(directory).glob(f"{pattern}*"):
-            if now - file.stat().st_mtime > 3600:  # 1 hora
+            if now - file.stat().st_mtime > 3600:  
                 file.unlink()
                 logger.info(f"Limpieza: {file.name} eliminado")
     except Exception as e:
@@ -372,14 +381,10 @@ def mobile_page():
 def upload_from_mobile():
     """
     Recibe imágenes del móvil, crea collage y notifica a la app.
-    
-    Returns:
-        HTML de confirmación o error 400
     """
     global mobile_capture_queue
     
     try:
-        # Limpiar archivos antiguos antes de procesar
         cleanup_temp_files(Config.IMAGES_MANUAL_DIR)
         
         received_images = []
@@ -410,7 +415,6 @@ def upload_from_mobile():
                 logger.info(f"Imagen recibida: {key} ({img.size})")
             except Exception as e:
                 logger.error(f"Error al procesar {key}: {e}")
-                # Limpiar archivo corrupto
                 os.remove(temp_path)
                 continue
 
@@ -521,11 +525,6 @@ def request_entity_too_large(error):
 def start_flask_server(host='0.0.0.0', port=5000, debug=False):
     """
     Inicia el servidor Flask.
-    
-    Args:
-        host: IP del servidor (0.0.0.0 = todas las interfaces)
-        port: Puerto del servidor
-        debug: Modo debug de Flask
     """
     local_ip = get_local_ip()
     
@@ -537,15 +536,6 @@ def start_flask_server(host='0.0.0.0', port=5000, debug=False):
     logger.info(f"  🌐 http://localhost:{port} (solo en esta PC)")
     logger.info("=" * 70)
     
-    # Imprimir en consola también
-    print("\n" + "=" * 70)
-    print("🐟 SERVIDOR DE CAPTURA MÓVIL INICIADO")
-    print("=" * 70)
-    print(f"\n📱 Accede desde tu móvil en:")
-    print(f"   http://{local_ip}:{port}\n")
-    print("💡 Asegúrate de que el móvil esté en la misma red WiFi")
-    print("=" * 70 + "\n")
-    
     flask_app.run(
         host=host,
         port=port,
@@ -555,7 +545,6 @@ def start_flask_server(host='0.0.0.0', port=5000, debug=False):
     )
 
 if __name__ == '__main__':
-    # Iniciar servidor
     start_flask_server(
         host='0.0.0.0',
         port=5000,

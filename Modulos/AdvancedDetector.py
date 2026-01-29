@@ -1,32 +1,49 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Detector de Visión Avanzada (AdvancedDetector.py)
+DESCRIPCIÓN: Actúa como orquestador central de las capacidades de Inteligencia Artificial.
+             Integra modelos de lenguaje visual (VLM) para detección semántica y 
+             modelos de segmentación (SAM) para la extracción precisa de siluetas.
+"""
+
 import cv2
 import logging
 import numpy as np
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
 from PIL import Image
+import moondream as md_lib 
 
 from Config.Config import Config
 from .SpineMeasurer import SpineMeasurer
+from .SegmentationRefiner import SegmentationRefiner
 
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# GESTIÓN DE DEPENDENCIAS OPCIONALES (FALLBACKS)
+# ============================================================================
 try:
-    import moondream as md_lib  # type: ignore
     MOONDREAM_API_AVAILABLE = True
 except ImportError:
     MOONDREAM_API_AVAILABLE = False
     logger.warning("Libreria 'moondream' no instalada.")
 
 try:
-    from .SegmentationRefiner import SegmentationRefiner
     REFINER_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"SegmentationRefiner no disponible: {e}")
     REFINER_AVAILABLE = False
 
+# ============================================================================
+# ESTRUCTURAS DE DATOS
+# ============================================================================
 @dataclass
 class BiometryResult:
-    """Estructura de datos para encapsular el resultado del análisis."""
+    """
+    Objeto de Transferencia de Datos (DTO) que encapsula el resultado completo 
+    del análisis biométrico de un espécimen.
+    """
     bbox: Tuple[int, int, int, int]  
     mask: Optional[np.ndarray] = None
     spine_length: float = 0.0
@@ -43,7 +60,11 @@ class BiometryResult:
 
 class AdvancedDetector:
     """
-    Orquestador de Visión Artificial Avanzada para detección y medición de peces.
+    Motor de Visión Artificial Híbrido.
+    
+    Implementa un patrón 'Chain of Responsibility' (Cadena de Responsabilidad) para 
+    intentar diferentes estrategias de detección (Nube -> Local -> Clásico) hasta 
+    obtener un resultado válido.
     """
 
     def __init__(self, api_key: Optional[str] = None):
@@ -51,7 +72,6 @@ class AdvancedDetector:
         self.detectors_chain: List[Dict[str, Any]] = []
         self.refiner: Optional[SegmentationRefiner] = None
         self.api_model = None
-        
 
         self.api_key = api_key if api_key else getattr(Config, 'MOONDREAM_API_KEY', '')
 
@@ -70,7 +90,7 @@ class AdvancedDetector:
                 self.refiner = SegmentationRefiner()
                 logger.info("Refinador de siluetas cargado.")
             except Exception as e:
-                logger.error(f"Error critico cargando MobileSAM: {e}")
+                logger.error(f"Error critico cargando MobileSAM: {e}.")
                 self.refiner = None
         else:
             logger.warning("SegmentationRefiner no esta disponible.")
@@ -173,9 +193,9 @@ class AdvancedDetector:
                 result.spine_length = spine_len
                 result.spine_visualization = skeleton_img
                 
-                logger.info(f"Biometria exitosa: Longitud={spine_len:.1f}px, Box={result.bbox}")
+                logger.info(f"Biometria exitosa: Longitud={spine_len:.1f}px, Box={result.bbox}.")
             else:
-                logger.warning(f"Objeto muy pequeno para medir: {w}x{h}")
+                logger.warning(f"Objeto muy pequeno para medir: {w}x{h}.")
 
             return result
 
@@ -215,11 +235,11 @@ class AdvancedDetector:
                 h_box = real_y2 - real_y1
 
                 if w_box < Config.MIN_BOX_SIZE_PX or h_box < Config.MIN_BOX_SIZE_PX:
-                    logger.debug(f"Deteccion ignorada por tamano pequeno: {w_box}x{h_box}")
+                    logger.debug(f"Deteccion ignorada por tamano pequeno: {w_box}x{h_box}.")
                     return None
 
                 return (real_x1, real_y1, real_x2, real_y2)
 
         except Exception as e:
-            logger.error(f"Error API Moondream: {e}")
+            logger.error(f"Error API Moondream: {e}.")
             return None

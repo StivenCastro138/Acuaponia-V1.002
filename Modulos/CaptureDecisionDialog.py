@@ -1,3 +1,12 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Interfaz de Validación de Captura (CaptureDecisionDialog.py)
+DESCRIPCIÓN: Implementa un diálogo modal de decisión que permite al operario:
+             1. Inspeccionar visualmente la calidad de los frames capturados.
+             2. Seleccionar el flujo de procesamiento (Descartar, Manual o IA).
+             3. Prevenir el ingreso de datos basura al sistema (Human-in-the-loop).
+"""
+
 import cv2
 import numpy as np
 from typing import Optional
@@ -11,7 +20,10 @@ logger = logging.getLogger(__name__)
 
 class CaptureDecisionDialog(QDialog):
     """
-    Diálogo modal estandarizado para validar la calidad de la captura.
+    Diálogo modal de alto nivel para la validación de tomas fotográficas.
+    
+    Gestiona la visualización del par estéreo (cámara lateral y cenital) y 
+    retorna códigos de estado estandarizados para controlar el flujo del programa.
     """
     RESULT_DISCARD = 0
     RESULT_IA = 1
@@ -22,13 +34,32 @@ class CaptureDecisionDialog(QDialog):
         self.setWindowTitle("Validación de Captura Biométrica")
         self.setModal(True)
         
-        # Ajuste dinámico de tamaño según pantalla
         screen = QApplication.primaryScreen().availableGeometry()
-        window_width = int(screen.width() * 0.5)
-        window_height = int(((window_width / 2) * 9 / 16) + screen.height() * 0.1)
 
-        self.resize(window_width, window_height)
+        MAX_SCALE = 0.7
 
+        h, w = frame_left.shape[:2]   # FHD = 1080x1920
+
+        # Espacio máximo permitido para la ventana
+        max_win_w = int(screen.width() * 0.5) - 80
+        max_win_h = int(screen.height() * 0.5) - 200
+
+        # Escala por ancho (dos cámaras)
+        scale_w = max_win_w / (w * 2)
+
+        # Escala por alto (una sola)
+        scale_h = max_win_h / h
+
+        # Escala final segura
+        scale = min(MAX_SCALE, scale_w, scale_h)
+
+        self.display_w = int(w * scale)
+        self.display_h = int(h * scale)
+
+        window_width = self.display_w * 2 + 80
+        window_height = self.display_h + 200
+
+        self.setFixedSize(window_width, window_height)
         self._init_ui(frame_left, frame_top)
 
     def _init_ui(self, frame_left, frame_top):
@@ -54,29 +85,34 @@ class CaptureDecisionDialog(QDialog):
         self._display_frame(frame_left, self.lbl_left)
         self._display_frame(frame_top, self.lbl_top)
 
-        main_layout.addWidget(preview_group, stretch=1) 
+        main_layout.addWidget(preview_group) 
 
-        # 3. Botonera de Decisión con Clases CSS Globales
         decision_layout = QHBoxLayout()
         decision_layout.setSpacing(20)
 
-        # --- Botón Descartar (Secondary/Warning) ---
+        # --- Botón Descartar ---
         self.btn_discard = QPushButton("Descartar\n(Esc)")
-        self.btn_discard.setProperty("class", "warning") # Clase para Rojo/Riesgo
+        self.btn_discard.setProperty("class", "warning") 
+        self.btn_discard.style().unpolish(self.btn_discard)
+        self.btn_discard.style().polish(self.btn_discard)
         self.btn_discard.setCursor(Qt.PointingHandCursor)
         self.btn_discard.setToolTip("Eliminar esta captura y volver al video en vivo para repetir la toma.")
         self.btn_discard.clicked.connect(self.reject_capture)
 
         # --- Botón Manual (Info) ---
         self.btn_use_manual = QPushButton("Medición Manual\n(M)")
-        self.btn_use_manual.setProperty("class", "info") # Clase para Azul Claro
+        self.btn_use_manual.setProperty("class", "info") 
+        self.btn_use_manual.style().unpolish(self.btn_use_manual)
+        self.btn_use_manual.style().polish(self.btn_use_manual)
         self.btn_use_manual.setCursor(Qt.PointingHandCursor)
         self.btn_use_manual.setToolTip("Ingresar las medidas manualmente.")
         self.btn_use_manual.clicked.connect(self.accept_manual)
 
         # --- Botón IA (Primary/Success) ---
         self.btn_use_ai = QPushButton("Procesar con IA\n(Enter)")
-        self.btn_use_ai.setProperty("class", "success") # Clase para Verde/Confirmación
+        self.btn_use_ai.setProperty("class", "success") 
+        self.btn_use_ai.style().unpolish(self.btn_use_ai)
+        self.btn_use_ai.style().polish(self.btn_use_ai)
         self.btn_use_ai.setCursor(Qt.PointingHandCursor)
         self.btn_use_ai.setToolTip("Ejecutar la IA de detección para obtener medidas automáticas.")
         self.btn_use_ai.clicked.connect(self.accept_ai)
@@ -88,16 +124,11 @@ class CaptureDecisionDialog(QDialog):
         
         main_layout.addLayout(decision_layout)
 
-        # Eliminamos setStyleSheet fijo del fondo para que use el del tema activo
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
     def _create_image_label(self, tooltip: str) -> QLabel:
-        """Factory de labels para las cámaras."""
         lbl = QLabel()
-        lbl.setMinimumSize(320, 240)
-        lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored) 
-        # Usamos la clase video-feed definida en tu CSS global
-        lbl.setProperty("class", "video-feed") 
+        lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setToolTip(tooltip)
         return lbl
@@ -109,38 +140,28 @@ class CaptureDecisionDialog(QDialog):
             return
 
         try:
-            # Asegurar que los datos sean contiguos para QImage
             frame_contig = np.ascontiguousarray(frame)
             frame_rgb = cv2.cvtColor(frame_contig, cv2.COLOR_BGR2RGB)
             h, w, ch = frame_rgb.shape
             bytes_per_line = ch * w
             
             qt_image = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
-            
             label.original_pixmap = QPixmap.fromImage(qt_image)
-            self._update_label_scaling(label)
-            
-        except Exception as e:
-            logger.error(f"Error renderizando preview: {e}")
-            label.setText("⚠️ ERROR DE RENDER")
+            label.setFixedSize(self.display_w, self.display_h)
 
-    def _update_label_scaling(self, label: QLabel):
-        """Ajusta la imagen al tamaño dinámico del label."""
-        if hasattr(label, 'original_pixmap') and label.original_pixmap:
             scaled = label.original_pixmap.scaled(
-                label.size(), 
-                Qt.AspectRatioMode.KeepAspectRatio, 
+                self.display_w,
+                self.display_h,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
                 Qt.TransformationMode.SmoothTransformation
             )
+
             label.setPixmap(scaled)
+            
+        except Exception as e:
+            logger.error(f"Error renderizando preview: {e}.")
+            label.setText("⚠️ ERROR DE RENDER")
 
-    def resizeEvent(self, event):
-        """Mantiene las imágenes ajustadas si el usuario estira el diálogo."""
-        self._update_label_scaling(self.lbl_left)
-        self._update_label_scaling(self.lbl_top)
-        super().resizeEvent(event)
-
-    # --- Lógica de Retorno ---
     def accept_ai(self): self.done(self.RESULT_IA)
     def accept_manual(self): self.done(self.RESULT_MANUAL)
     def reject_capture(self): self.done(self.RESULT_DISCARD)

@@ -1,3 +1,11 @@
+"""
+PROYECTO: FishTrace - Trazabilidad de Crecimiento de Peces
+MÓDULO: Medidor de Columna Vertebral (SpineMeasurer.py)
+DESCRIPCIÓN: Motor de geometría computacional avanzado. Utiliza algoritmos de esqueletización,
+             teoría de grafos y ajuste de curvas (Splines) para medir la longitud real
+             de un organismo curvado con precisión sub-píxel.
+"""
+
 import cv2
 import numpy as np
 import logging
@@ -98,7 +106,7 @@ class SpineMeasurer:
             best_path = nx.shortest_path(G, u, v, weight='weight')
             
         except Exception as e:
-            logger.error("Error en busqueda de camino grafo", exc_info=True)
+            logger.error("Error en busqueda de camino grafo.", exc_info=True)
             return None
 
         return np.array(best_path)
@@ -139,7 +147,7 @@ class SpineMeasurer:
             return float(length)
 
         except Exception as e:
-            logger.info("Fallo spline, usando distancia euclidiana", exc_info=True)
+            logger.info("Fallo spline, usando distancia euclidiana.", exc_info=True)
             diffs = np.diff(points_yx, axis=0)
             return float(np.sum(np.sqrt(np.sum(diffs**2, axis=1))))
 
