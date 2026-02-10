@@ -21,7 +21,7 @@ import logging
 import platform
 import subprocess
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -60,6 +60,9 @@ import qdarktheme
 import darkdetect
 import qrcode
 
+import io
+from scipy.optimize import curve_fit
+
 from BasedeDatos.DatabaseManager import DatabaseManager
 from BasedeDatos.DatabaseManager import MEASUREMENT_COLUMNS
 from Config.Config import Config
@@ -76,6 +79,7 @@ from Modulos.AdvancedDetector import AdvancedDetector
 from .FishAnatomyValidator import FishAnatomyValidator
 from .CaptureDecisionDialog import CaptureDecisionDialog
 from .OptimizedCamera import OptimizedCamera
+from .ApiService import ApiService
 from Herramientas.mobil import start_flask_server, mobile_capture_queue, get_local_ip
 
 logger = logging.getLogger(__name__)
@@ -208,6 +212,12 @@ class MainWindow(QMainWindow):
         self.processor.start()
         self.start_cameras()
         self.status_bar.set_status("🚀 Sistema listo. Esperando captura")
+        
+        try:
+            self.api_service = ApiService(port=5000)
+            self.api_service.start()
+        except Exception as e:
+            logger(f"Error API: {e}")
         
     def init_ui(self):
         central_widget = QWidget()
@@ -2987,23 +2997,25 @@ class MainWindow(QMainWindow):
         grid_graphs.setSpacing(8)
         
         buttons_config = [
-            ("📏 Longitudes", 'length', 
-             "<b>HISTOGRAMA DE TALLAS:</b><br>Exporta la distribución de frecuencias<br>de las longitudes detectadas.", 0, 0),
+            # Fila 0: Distribuciones Básicas
+            ("📏 Histograma Tallas", 'length', 
+             "<b>DISTRIBUCIÓN TALLAS:</b><br>Frecuencia de longitudes.", 0, 0),
              
-            ("⚖️ Pesos", 'weight', 
-             "<b>DISTRIBUCIÓN DE PESO:</b><br>Exporta el histograma de biomasa<br>estimada de la población.", 0, 1),
+            ("⚖️ Histograma Pesos", 'weight', 
+             "<b>DISTRIBUCIÓN PESO:</b><br>Frecuencia de biomasa.", 0, 1),
              
-            ("📈 Correlación", 'correlation', 
-             "<b>RELACIÓN L/P:</b><br>Gráfico de dispersión que muestra la<br>salud del crecimiento (Largo vs Peso).", 0, 2),
+            ("📈 Salud (L vs P)", 'correlation', 
+             "<b>RELACIÓN L/P:</b><br>Dispersión Longitud vs Peso.", 0, 2),
              
-            ("⏱ Evolución", 'timeline', 
-             "<b>CRECIMIENTO TEMPORAL:</b><br>Muestra la tendencia de crecimiento<br>a lo largo de las fechas de muestreo.", 1, 0),
+            # Fila 1: Crecimiento y Morfometría
+            ("⏱ Crecimiento (Peso)", 'timeline_weight', 
+             "<b>EVOLUCIÓN PESO:</b><br>Curva de crecimiento con proyección.", 1, 0),
              
-            ("↕️ Alturas", 'height', 
-             "<b>MORFOMETRÍA (H):</b><br>Distribución de las alturas corporales.", 1, 1),
+            ("📏 Crecimiento (Largo)", 'timeline_length', 
+             "<b>EVOLUCIÓN LONGITUD:</b><br>Curva de crecimiento con proyección.", 1, 1),
              
-            ("↔️ Anchos", 'width', 
-             "<b>MORFOMETRÍA (W):</b><br>Distribución del grosor de los peces.", 1, 2),
+            ("🧬 Morfometría (H/W)", 'morphometry', 
+             "<b>ANCHO Y ALTO:</b><br>Distribución combinada de medidas.", 1, 2),
         ]
 
         for text, key, tip, r, c in buttons_config:
@@ -3131,234 +3143,210 @@ class MainWindow(QMainWindow):
         
         self.gallery_list.addItem(item)
 
-    def open_enlarged_graph(self, item):
-        """Abre una ventana modal con la imagen en alta resolución"""
-        pixmap = item.data(Qt.ItemDataRole.UserRole)
-        title = item.text()
-        
-        if not pixmap or pixmap.isNull():
-            self.status_bar.set_status("❌ Error al recuperar el gráfico", "error")
-            return
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle(f"Visualización Detallada: {title}")
-        dialog.setMinimumSize(900, 650) 
-        
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
-
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-
-        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        
-        lbl_image = QLabel()
-
-        lbl_image.setPixmap(pixmap.scaled(
-            dialog.size() * 0.95, 
-            Qt.AspectRatioMode.KeepAspectRatio, 
-            Qt.TransformationMode.SmoothTransformation
-        ))
-        lbl_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        scroll_area.setWidget(lbl_image)
-        layout.addWidget(scroll_area)
-
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        
-        btn_close = QPushButton("Cerrar")
-        btn_close.setProperty("class", "secondary")
-        btn_close.setFixedWidth(120)
-        btn_close.setCursor(Qt.PointingHandCursor)
-        btn_close.clicked.connect(dialog.accept)
-        btn_layout.addWidget(btn_close)
-        
-        layout.addLayout(btn_layout)
- 
-        if hasattr(self, 'status_bar'):
-            self.status_bar.set_status(f"👁️ Visualizando: {title}", "info")
-        
-        dialog.exec()
-
     def export_individual_graph(self, graph_type):
         """
-        Exporta gráficos individuales - SIEMPRE EN MODO CLARO (Fondo Blanco)
-        Ideal para reportes y documentos.
+        💾 EXPORTADOR PROFESIONAL (CORREGIDO):
+        - Usa mapeo de columnas local (infalible).
+        - Genera gráficos de alta calidad (300 DPI) con fondo blanco.
+        - Usa matemática Gompertz/Lineal para curvas de crecimiento.
         """
-        measurements = self.db.get_filtered_measurements(limit=2000)
-        
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        import numpy as np
+        from datetime import datetime, timedelta
+        from scipy.optimize import curve_fit 
+
+        # 1. Obtener Datos
+        measurements = self.db.get_filtered_measurements(limit=3000)
         if not measurements:
-            QMessageBox.warning(self, "Advertencia", "No hay mediciones para exportar")
+            QMessageBox.warning(self, "Advertencia", "No hay datos en la base de datos.")
             return
+
+        # 2. Configurar Estilo de Reporte (Fondo Blanco)
+        plt.style.use('default') 
+        plt.rcParams.update({'font.size': 10, 'font.family': 'sans-serif'})
         
-        try:
+        # Colores
+        C_BLUE = '#2980b9'
+        C_GREEN = '#27ae60'
+        C_RED = '#c0392b'
+        C_PURPLE = '#8e44ad'
+        C_ORANGE = '#d35400'
 
-            plt.close('all')
-            plt.rcParams.update(plt.rcParamsDefault) 
-            plt.style.use('default')                
+        # Preparar Figura
+        fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
+        
+        # --- CORRECCIÓN CRÍTICA: MAPEO SEGURO ---
+        # Creamos el mapa de columnas localmente para no fallar
+        col_map = {col: i for i, col in enumerate(MEASUREMENT_COLUMNS)}
+
+        def get_val(m, field):
+            idx = col_map.get(field)
+            if idx is not None and idx < len(m):
+                val = m[idx]
+                if val is not None and val != "":
+                    try: return float(val)
+                    except: return 0.0
+            return 0.0
+
+        def get_date(m):
+            idx = col_map.get('timestamp')
+            if idx is not None and idx < len(m):
+                val = m[idx]
+                try: return datetime.fromisoformat(str(val))
+                except: return None
+            return None
+        # ----------------------------------------
+
+        filename = f"grafico_{graph_type}.png"
+        has_data = False
+
+        # ======================================================================
+        # LÓGICA DE GRÁFICOS
+        # ======================================================================
+
+        # A. HISTOGRAMAS
+        if graph_type == 'length':
+            data = [get_val(m, 'length_cm') for m in measurements if get_val(m, 'length_cm') > 0]
+            if data:
+                ax.hist(data, bins=15, color=C_BLUE, alpha=0.7, edgecolor='black')
+                ax.set_title('Distribución de Tallas (Longitud)', fontweight='bold')
+                ax.set_xlabel('Longitud (cm)'); ax.set_ylabel('Frecuencia')
+                ax.axvline(np.mean(data), color='red', linestyle='--', label=f'Promedio: {np.mean(data):.1f} cm')
+                has_data = True
+
+        elif graph_type == 'weight':
+            data = [get_val(m, 'weight_g') for m in measurements if get_val(m, 'weight_g') > 0]
+            if data:
+                ax.hist(data, bins=15, color=C_GREEN, alpha=0.7, edgecolor='black')
+                ax.set_title('Distribución de Biomasa (Peso)', fontweight='bold')
+                ax.set_xlabel('Peso (g)'); ax.set_ylabel('Frecuencia')
+                ax.axvline(np.mean(data), color='red', linestyle='--', label=f'Promedio: {np.mean(data):.1f} g')
+                has_data = True
+
+        elif graph_type == 'morphometry':
+            h_data = [get_val(m, 'height_cm') for m in measurements if get_val(m, 'height_cm') > 0]
+            w_data = [get_val(m, 'width_cm') for m in measurements if get_val(m, 'width_cm') > 0]
             
-            TEXT_COLOR = 'black'
-            GRID_COLOR = '#cccccc'
-            BG_COLOR = 'white'
+            if h_data:
+                ax.hist(h_data, bins=10, color=C_BLUE, alpha=0.5, label='Altura', edgecolor='black')
+                has_data = True
+            if w_data:
+                ax.hist(w_data, bins=10, color=C_ORANGE, alpha=0.5, label='Ancho', edgecolor='black')
+                has_data = True
             
-            columns_info = {col: i for i, col in enumerate(MEASUREMENT_COLUMNS)}
+            ax.set_title('Morfometría (Altura y Ancho)', fontweight='bold')
+            ax.set_xlabel('Medida (cm)')
+
+        # B. SCATTER (Correlación)
+        elif graph_type == 'correlation':
+            l_list, w_list = [], []
+            for m in measurements:
+                l, w = get_val(m, 'length_cm'), get_val(m, 'weight_g')
+                if l > 0 and w > 0:
+                    l_list.append(l); w_list.append(w)
             
-            def get_val(m, field, default=0.0):
-                if field in columns_info:
-                    idx = columns_info[field]
-                    if idx < len(m):
-                        val = m[idx]
-                        if val is None or val == "": return default
-                        try: return float(val)
-                        except: return default
-                return default
-            
-            def get_str(m, field):
-                if field in columns_info:
-                    idx = columns_info[field]
-                    if idx < len(m):
-                        return str(m[idx]) if m[idx] is not None else ""
-                return ""
-
-            fig, ax = plt.subplots(figsize=(10, 6), dpi=100)
-            fig.patch.set_facecolor(BG_COLOR)
-            ax.set_facecolor(BG_COLOR)
-            
-            filename = ""
-            has_data = False
-            
-            # 1. LONGITUDES
-            if graph_type == 'length':
-                data = [get_val(m, 'length_cm') for m in measurements if get_val(m, 'length_cm') > 0]
-                if data:
-                    ax.hist(data, bins=20, color='#3498db', alpha=0.8, edgecolor='black')
-                    ax.set_title('Distribución de Longitudes (cm)', color=TEXT_COLOR, fontweight='bold')
-                    ax.set_xlabel('Longitud (cm)', color=TEXT_COLOR)
-                    ax.axvline(np.mean(data), color='red', linestyle='--', label=f'Promedio: {np.mean(data):.2f}')
-                    filename = f'longitudes_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
-                    has_data = True
-
-            # 2. PESOS
-            elif graph_type == 'weight':
-                data = [get_val(m, 'weight_g') for m in measurements if get_val(m, 'weight_g') > 0]
-                if data:
-                    ax.hist(data, bins=20, color='#e67e22', alpha=0.8, edgecolor='black')
-                    ax.set_title('Distribución de Pesos (g)', color=TEXT_COLOR, fontweight='bold')
-                    ax.set_xlabel('Peso (g)', color=TEXT_COLOR)
-                    ax.axvline(np.mean(data), color='red', linestyle='--', label=f'Promedio: {np.mean(data):.2f}')
-                    filename = f'pesos_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
-                    has_data = True
-
-            # 3. ALTURAS
-            elif graph_type == 'height':
-                data = []
-                for m in measurements:
-                    v = get_val(m, 'manual_height_cm')
-                    if v <= 0: v = get_val(m, 'height_cm')
-                    if v > 0: data.append(v)
-                if data:
-                    ax.hist(data, bins=15, color='#1abc9c', alpha=0.8, edgecolor='black')
-                    ax.set_title('Distribución de Alturas (cm)', color=TEXT_COLOR, fontweight='bold')
-                    ax.set_xlabel('Altura (cm)', color=TEXT_COLOR)
-                    ax.axvline(np.mean(data), color='red', linestyle='--', label=f'Promedio: {np.mean(data):.2f}')
-                    filename = f'alturas_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
-                    has_data = True
-
-            # 4. ANCHOS
-            elif graph_type == 'width':
-                data = []
-                for m in measurements:
-                    v = get_val(m, 'manual_width_cm')
-                    if v <= 0: v = get_val(m, 'width_cm')
-                    if v > 0: data.append(v)
-                if data:
-                    ax.hist(data, bins=15, color='#9b59b6', alpha=0.8, edgecolor='black')
-                    ax.set_title('Distribución de Anchos (cm)', color=TEXT_COLOR, fontweight='bold')
-                    ax.set_xlabel('Ancho (cm)', color=TEXT_COLOR)
-                    ax.axvline(np.mean(data), color='red', linestyle='--', label=f'Promedio: {np.mean(data):.2f}')
-                    filename = f'anchos_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
-                    has_data = True
-
-            # 5. CORRELACIÓN
-            elif graph_type == 'correlation':
-                l_list, w_list = [], []
-                for m in measurements:
-                    l = get_val(m, 'length_cm')
-                    w = get_val(m, 'weight_g')
-                    if l > 0 and w > 0:
-                        l_list.append(l); w_list.append(w)
-                if len(l_list) > 2:
-                    ax.scatter(l_list, w_list, color='#2980b9', alpha=0.6, edgecolors='black')
-                    try:
-                        z = np.polyfit(l_list, w_list, 3)
-                        p = np.poly1d(z)
-                        xp = np.linspace(min(l_list), max(l_list), 100)
-                        ax.plot(xp, p(xp), color='#c0392b', linewidth=2, label='Tendencia')
-                    except: pass
-                    ax.set_title('Relación Longitud vs Peso', color=TEXT_COLOR, fontweight='bold')
-                    ax.set_xlabel('Longitud (cm)', color=TEXT_COLOR)
-                    ax.set_ylabel('Peso (g)', color=TEXT_COLOR)
-                    filename = f'correlacion_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
-                    has_data = True
-
-            # 6. TIMELINE (PROMEDIO DIARIO)
-            elif graph_type == 'timeline':
-                daily = {}
-                for m in measurements:
-                    l = get_val(m, 'length_cm')
-                    ts = get_str(m, 'timestamp')
-                    if l > 0 and ts:
-                        try:
-                            day = datetime.fromisoformat(ts).date()
-                            if day not in daily: daily[day] = []
-                            daily[day].append(l)
-                        except: pass
+            if l_list:
+                # CORRECCIÓN: Agregamos label='Muestras' para que ax.legend() funcione
+                ax.scatter(l_list, w_list, c=C_RED, alpha=0.6, edgecolors='black', label='Muestras')
                 
-                if daily:
-                    d_sorted = sorted(daily.keys())
-                    avgs = [np.mean(daily[d]) for d in d_sorted]
-                    ax.plot(d_sorted, avgs, 'o-', color='#2c3e50', linewidth=2, label='Promedio Diario')
-                    ax.fill_between(d_sorted, avgs, alpha=0.1, color='#2c3e50')
-                    ax.set_title('Crecimiento Promedio Diario', color=TEXT_COLOR, fontweight='bold')
-                    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
-                    plt.setp(ax.xaxis.get_majorticklabels(), rotation=30)
-                    filename = f'timeline_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
-                    has_data = True
+                ax.set_title('Relación Longitud / Peso', fontweight='bold')
+                ax.set_xlabel('Longitud (cm)'); ax.set_ylabel('Peso (g)')
+                has_data = True
 
-            ax.tick_params(axis='x', colors=TEXT_COLOR)
-            ax.tick_params(axis='y', colors=TEXT_COLOR)
-            ax.spines['bottom'].set_color(TEXT_COLOR)
-            ax.spines['top'].set_color(TEXT_COLOR)
-            ax.spines['left'].set_color(TEXT_COLOR)
-            ax.spines['right'].set_color(TEXT_COLOR)
-            ax.grid(True, linestyle='--', alpha=0.4, color=GRID_COLOR)
+        # C. CURVAS DE CRECIMIENTO (Soporte Gompertz y Legacy Timeline)
+        elif 'timeline' in graph_type:
+            # Detectar tipo (Si es el botón viejo 'timeline', asumimos peso)
+            is_weight = ('weight' in graph_type) or (graph_type == 'timeline') 
+            field = 'weight_g' if is_weight else 'length_cm'
+            unit = 'g' if is_weight else 'cm'
+            color = C_PURPLE if is_weight else C_ORANGE
+            title_txt = "Crecimiento de Peso" if is_weight else "Crecimiento de Longitud"
 
-            if not has_data:
-                ax.text(0.5, 0.5, 'Sin datos suficientes', ha='center', color='red')
-                filename = f"vacio_{graph_type}.png"
-            else:
-                ax.legend(facecolor='white', edgecolor='#cccccc')
+            # 1. Agrupar Semanalmente
+            weekly_data = {}
+            for m in measurements:
+                val = get_val(m, field)
+                dt = get_date(m)
+                if val > 0 and dt:
+                    monday = dt.date() - timedelta(days=dt.date().weekday())
+                    weekly_data[monday] = weekly_data.get(monday, []) + [val]
 
-            # Guardar
-            output_dir = os.path.join("Resultados", "Graficos")
-            os.makedirs(output_dir, exist_ok=True)
-            path = os.path.join(output_dir, filename)
+            if weekly_data:
+                sorted_weeks = sorted(weekly_data.keys())
+                sorted_dts = [datetime.combine(d, datetime.min.time()) for d in sorted_weeks]
+                avg_vals = np.array([sum(weekly_data[d])/len(weekly_data[d]) for d in sorted_weeks])
+                
+                # Graficar Puntos
+                ax.plot(sorted_dts, avg_vals, 'o', color=color, markersize=8, label='Promedio Semanal')
+
+                # CALCULO DE TENDENCIA
+                if len(avg_vals) >= 2:
+                    start_date = sorted_dts[0]
+                    days_rel = np.array([(d - start_date).days for d in sorted_dts])
+                    
+                    last_day = days_rel[-1]
+                    future_days = np.linspace(0, last_day + 45, 100) # +45 días
+                    y_trend = None
+                    label_trend = ""
+
+                    # Intento Gompertz
+                    try:
+                        if len(avg_vals) >= 3:
+                            def model_gompertz(t, A, B, k): return A * np.exp(-np.exp(B - k * t))
+                            max_val = max(avg_vals)
+                            p0 = [max_val * 1.5, 1.0, 0.02]
+                            bounds = ([max_val, -10, 0], [np.inf, 10, 1.0])
+                            params, _ = curve_fit(model_gompertz, days_rel, avg_vals, p0=p0, bounds=bounds, maxfev=5000)
+                            candidate = model_gompertz(future_days, *params)
+                            if candidate[-1] < max_val * 3: 
+                                y_trend = candidate
+                                label_trend = "Tendencia (Gompertz)"
+                    except: pass
+
+                    # Fallback Lineal
+                    if y_trend is None:
+                        coeffs = np.polyfit(days_rel, avg_vals, 1)
+                        y_trend = np.poly1d(coeffs)(future_days)
+                        label_trend = "Tendencia (Lineal)"
+
+                    # Dibujar Línea
+                    future_dates = [start_date + timedelta(days=d) for d in future_days]
+                    ax.plot(future_dates, y_trend, '--', color='#2c3e50', linewidth=2, label=label_trend)
+                    
+                    # Etiqueta final
+                    final_val = y_trend[-1]
+                    if not np.isinf(final_val) and final_val < 100000:
+                        ax.text(future_dates[-1], final_val, f"{final_val:.1f} {unit}", fontweight='bold')
+
+                ax.set_title(title_txt, fontweight='bold')
+                ax.set_ylabel(f"Valor ({unit})")
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%b'))
+                fig.autofmt_xdate()
+                has_data = True
+
+        # ======================================================================
+        # GUARDADO FINAL
+        # ======================================================================
+        if has_data:
+            ax.legend()
+            ax.grid(True, linestyle='--', alpha=0.5)
             
-            # GUARDADO FORZANDO BLANCO
-            plt.savefig(path, bbox_inches='tight', dpi=300, facecolor='white', transparent=False)
+            save_dir = os.path.join(Config.OUT_DIR, "Graficos")
+            os.makedirs(save_dir, exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            full_path = os.path.join(save_dir, f"{graph_type}_{timestamp}.png")
+            
+            plt.savefig(full_path, bbox_inches='tight')
             plt.close(fig)
             
-            if has_data:
-                QMessageBox.information(self, "Éxito", f"Gráfico guardado:\n{path}")
-            else:
-                QMessageBox.warning(self, "Aviso", "Gráfico vacío (sin datos válidos).")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error exportando:\n{e}")
-            logger.error(f"Export Error: {e}")
-    
+            QMessageBox.information(self, "Exportación Exitosa", f"Gráfico guardado en:\n{full_path}")
+            
+        else:
+            plt.close(fig)
+            QMessageBox.warning(self, "Error", "No se encontraron datos para generar este gráfico.")
+            
     def refresh_theme(self):
         """Refresco rápido del tema actual"""
 
@@ -4680,161 +4668,188 @@ class MainWindow(QMainWindow):
     
     def export_statistics(self):
         """
-        Exporta Panel Gráfico (PNG) - BLINDADO y con FONDO BLANCO (Estilo Reporte)
+        📊 EXPORTAR PANEL COMPLETO (6 en 1):
+        Genera una lámina resumen de alta resolución con fondo blanco.
+        Incluye la curva de crecimiento inteligente (Gompertz/Lineal).
         """
+
         # 1. Obtener datos
-        measurements = self.db.get_filtered_measurements(limit=1000)
+        measurements = self.db.get_filtered_measurements(limit=3000)
         
         if not measurements:
             QMessageBox.warning(self, "Advertencia", "No Hay Mediciones Para Exportar")
             return
         
         try:
-           
-            # --- CORRECCIÓN DE ESTILO ---
-            # Forzamos estilo 'default' o 'seaborn' para que el PNG salga con fondo blanco
-            # ideal para documentos, independiente de si la app está en modo oscuro.
+            # Configurar Estilo "Reporte Científico" (Fondo Blanco)
             plt.style.use('default') 
-            # -----------------------------
-
-            # 2. Preparar salida
-            output_dir = os.path.join("Resultados", "Graficos")
+            plt.rcParams.update({'font.size': 9, 'font.family': 'sans-serif'})
+            
+            # Directorio
+            output_dir = os.path.join(Config.OUT_DIR, "Graficos")
             os.makedirs(output_dir, exist_ok=True)
             
-            # 3. DETECCIÓN DINÁMICA DE COLUMNAS
+            # --- HELPERS DE EXTRACCIÓN ---
             col_map = {col: i for i, col in enumerate(MEASUREMENT_COLUMNS)}
             
-            # --- HELPER DE EXTRACCIÓN NUMÉRICA SEGURA ---
-            def get_val(row, col_name, default=0.0):
-                if col_name in col_map:
-                    idx = col_map[col_name]
-                    if idx < len(row):
-                        val = row[idx]
-                        if val is None or val == "":
-                            return default
-                        try:
-                            return float(val)
-                        except:
-                            return default
-                return default
+            def get_val(row, col_name):
+                idx = col_map.get(col_name)
+                if idx is not None and idx < len(row):
+                    try: return float(row[idx] or 0)
+                    except: pass
+                return 0.0
 
-            def get_str(row, col_name):
-                if col_name in col_map:
-                    idx = col_map[col_name]
-                    if idx < len(row):
-                        return str(row[idx]) if row[idx] is not None else ""
-                return ""
-            # --------------------------------------------
+            def get_date(row):
+                idx = col_map.get('timestamp')
+                if idx is not None and idx < len(row):
+                    try: return datetime.fromisoformat(str(row[idx]))
+                    except: pass
+                return None
 
-            # Extraer datos usando el helper seguro
+            # Extracción de Listas
             lengths = [get_val(m, 'length_cm') for m in measurements if get_val(m, 'length_cm') > 0]
             weights = [get_val(m, 'weight_g') for m in measurements if get_val(m, 'weight_g') > 0]
             
-            heights = []
-            widths = []
+            heights, widths = [], []
             for m in measurements:
-                h = get_val(m, 'manual_height_cm')
-                if h <= 0: h = get_val(m, 'height_cm')
+                h = get_val(m, 'manual_height_cm') or get_val(m, 'height_cm')
+                w_val = get_val(m, 'manual_width_cm') or get_val(m, 'width_cm')
                 if h > 0: heights.append(h)
+                if w_val > 0: widths.append(w_val)
 
-                w = get_val(m, 'manual_width_cm')
-                if w <= 0: w = get_val(m, 'width_cm')
-                if w > 0: widths.append(w)
-            
-            dates, dates_lengths = [], []
-            for m in measurements:
-                l = get_val(m, 'length_cm')
-                if l > 0:
-                    ts_str = get_str(m, 'timestamp')
-                    if ts_str:
-                        try:
-                            dates.append(datetime.fromisoformat(ts_str))
-                            dates_lengths.append(l)
-                        except: pass
-            
-            # 4. CONFIGURAR LIENZO
-            plt.close('all') 
-            fig = plt.figure(figsize=(18, 12), constrained_layout=True)
-            # Forzar fondo blanco explícito en la figura
+            # --- LIENZO 3x2 ---
+            fig = plt.figure(figsize=(16, 10), constrained_layout=True, dpi=200)
             fig.patch.set_facecolor('white')
-            
             gs = fig.add_gridspec(3, 2)
-            fig.suptitle(f'Reporte Gráfico de Trazabilidad - {datetime.now().strftime("%d/%m/%Y")}', fontsize=20, fontweight='bold', color='black')
             
-            # --- FILA 1 ---
+            # Título Global
+            fig.suptitle(f'Reporte de Trazabilidad - {datetime.now().strftime("%d/%m/%Y")}', 
+                         fontsize=16, fontweight='bold', color='#2c3e50')
+            
+            # 1. DISTRIBUCIÓN LONGITUD
             ax1 = fig.add_subplot(gs[0, 0])
             if lengths:
-                ax1.hist(lengths, bins=20, edgecolor='black', color='#3498db', alpha=0.7)
-                ax1.axvline(np.mean(lengths), color='red', linestyle='dashed', linewidth=1)
-                ax1.set_title(f'Distribución de Longitudes (n={len(lengths)})', fontweight='bold', color='black')
-                ax1.set_xlabel('Longitud (cm)', color='black')
-                ax1.tick_params(colors='black')
+                ax1.hist(lengths, bins=15, edgecolor='black', color='#3498db', alpha=0.8)
+                ax1.axvline(np.mean(lengths), color='red', linestyle='--', label=f'Prom: {np.mean(lengths):.1f}cm')
+                ax1.legend()
+            ax1.set_title('Distribución de Tallas', fontweight='bold'); ax1.set_xlabel('cm')
 
+            # 2. DISTRIBUCIÓN PESO
             ax2 = fig.add_subplot(gs[0, 1])
             if weights:
-                ax2.hist(weights, bins=20, edgecolor='black', color='#e67e22', alpha=0.7)
-                ax2.axvline(np.mean(weights), color='red', linestyle='dashed', linewidth=1)
-                ax2.set_title(f'Distribución de Pesos (n={len(weights)})', fontweight='bold', color='black')
-                ax2.set_xlabel('Peso (g)', color='black')
-                ax2.tick_params(colors='black')
+                ax2.hist(weights, bins=15, edgecolor='black', color='#2ecc71', alpha=0.8)
+                ax2.axvline(np.mean(weights), color='red', linestyle='--', label=f'Prom: {np.mean(weights):.1f}g')
+                ax2.legend()
+            ax2.set_title('Distribución de Peso', fontweight='bold'); ax2.set_xlabel('g')
 
-            # --- FILA 2 ---
+            # 3. RELACIÓN L/P (Scatter)
             ax3 = fig.add_subplot(gs[1, 0])
-            if lengths and weights:
-                min_len = min(len(lengths), len(weights))
-                ax3.scatter(lengths[:min_len], weights[:min_len], alpha=0.6, color='#27ae60', edgecolors='darkgreen')
-                ax3.set_title('Relación Peso vs. Longitud', fontweight='bold', color='black')
-                ax3.set_xlabel('Longitud (cm)', color='black')
-                ax3.set_ylabel('Peso (g)', color='black')
-                ax3.grid(True, linestyle='--', alpha=0.5)
-                ax3.tick_params(colors='black')
+            l_scat, w_scat = [], []
+            for m in measurements:
+                l, w = get_val(m, 'length_cm'), get_val(m, 'weight_g')
+                if l > 0 and w > 0: l_scat.append(l); w_scat.append(w)
+            
+            if l_scat:
+                ax3.scatter(l_scat, w_scat, alpha=0.5, color='#e74c3c', edgecolors='black')
+            ax3.set_title('Relación Longitud vs Peso', fontweight='bold')
+            ax3.set_xlabel('Longitud (cm)'); ax3.set_ylabel('Peso (g)')
+            ax3.grid(True, linestyle=':', alpha=0.5)
 
+            # 4. EVOLUCIÓN CRECIMIENTO (GOMPERTZ INTELIGENTE)
             ax4 = fig.add_subplot(gs[1, 1])
-            if len(dates) > 1:
-                ax4.plot(dates, dates_lengths, 'o-', color='#8e44ad', markersize=4, alpha=0.8)
-                ax4.set_title('Evolución del Crecimiento', fontweight='bold', color='black')
-                ax4.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
-                plt.setp(ax4.xaxis.get_majorticklabels(), rotation=30)
-                ax4.grid(True, alpha=0.3)
-                ax4.tick_params(colors='black')
+            
+            # Agrupar por Semana (Peso)
+            weekly_data = {}
+            for m in measurements:
+                w = get_val(m, 'weight_g')
+                dt = get_date(m)
+                if w > 0 and dt:
+                    monday = dt.date() - timedelta(days=dt.date().weekday())
+                    weekly_data[monday] = weekly_data.get(monday, []) + [w]
+            
+            if weekly_data:
+                sorted_weeks = sorted(weekly_data.keys())
+                sorted_dts = [datetime.combine(d, datetime.min.time()) for d in sorted_weeks]
+                avg_vals = np.array([sum(weekly_data[d])/len(weekly_data[d]) for d in sorted_weeks])
+                
+                # Puntos Reales
+                ax4.plot(sorted_dts, avg_vals, 'o', color='#8e44ad', markersize=6, label='Promedio Semanal')
+                
+                # --- MATEMÁTICA AVANZADA ---
+                if len(avg_vals) >= 2:
+                    start = sorted_dts[0]
+                    days_rel = np.array([(d - start).days for d in sorted_dts])
+                    last_day = days_rel[-1]
+                    future_rel = np.linspace(0, last_day + 45, 100) # +45 días
+                    y_trend = None
+                    lbl = ""
 
-            # --- FILA 3 ---
+                    # Intento Gompertz
+                    try:
+                        if len(avg_vals) >= 3:
+                            def model_gompertz(t, A, B, k): return A * np.exp(-np.exp(B - k * t))
+                            mx = max(avg_vals)
+                            p0 = [mx * 1.5, 1.0, 0.02]
+                            bounds = ([mx, -10, 0], [np.inf, 10, 1.0])
+                            params, _ = curve_fit(model_gompertz, days_rel, avg_vals, p0=p0, bounds=bounds, maxfev=5000)
+                            cand = model_gompertz(future_rel, *params)
+                            if cand[-1] < mx * 4: # Sanity check
+                                y_trend = cand
+                                lbl = "Tendencia (Gompertz)"
+                    except: pass
+
+                    # Fallback Lineal
+                    if y_trend is None:
+                        z = np.polyfit(days_rel, avg_vals, 1)
+                        y_trend = np.poly1d(z)(future_rel)
+                        lbl = "Tendencia (Lineal)"
+                    
+                    # Dibujar
+                    fut_dates = [start + timedelta(days=x) for x in future_rel]
+                    ax4.plot(fut_dates, y_trend, '--', color='#2c3e50', linewidth=2, label=lbl)
+                    
+                    # Etiqueta Final
+                    end_val = y_trend[-1]
+                    if end_val < 100000:
+                        ax4.text(fut_dates[-1], end_val, f"{end_val:.1f} g", fontweight='bold', ha='left')
+
+                ax4.xaxis.set_major_formatter(mdates.DateFormatter('%d/%b'))
+                ax4.legend()
+            
+            ax4.set_title('Proyección de Crecimiento (Peso)', fontweight='bold')
+            ax4.set_ylabel('Peso (g)'); ax4.grid(True, linestyle=':', alpha=0.5)
+
+            # 5. ALTURAS
             ax5 = fig.add_subplot(gs[2, 0])
             if heights:
-                ax5.hist(heights, bins=15, edgecolor='black', color='#00ced1', alpha=0.7)
-                ax5.axvline(np.mean(heights), color='red', linestyle='dashed', linewidth=1)
-                ax5.set_title(f'Distribución de Alturas (n={len(heights)})', fontweight='bold', color='black')
-                ax5.set_xlabel('Altura (cm)', color='black')
-                ax5.tick_params(colors='black')
+                ax5.hist(heights, bins=10, color='#1abc9c', edgecolor='black', alpha=0.7)
+                ax5.axvline(np.mean(heights), color='red', linestyle='--')
+            ax5.set_title('Distribución Alturas'); ax5.set_xlabel('cm')
 
+            # 6. ANCHOS
             ax6 = fig.add_subplot(gs[2, 1])
             if widths:
-                ax6.hist(widths, bins=15, edgecolor='black', color='#ff00ff', alpha=0.7)
-                ax6.axvline(np.mean(widths), color='red', linestyle='dashed', linewidth=1)
-                ax6.set_title(f'Distribución de Anchos (n={len(widths)})', fontweight='bold', color='black')
-                ax6.set_xlabel('Ancho (cm)', color='black')
-                ax6.tick_params(colors='black')
+                ax6.hist(widths, bins=10, color='#f1c40f', edgecolor='black', alpha=0.7)
+                ax6.axvline(np.mean(widths), color='red', linestyle='--')
+            ax6.set_title('Distribución Anchos'); ax6.set_xlabel('cm')
 
-            # Guardar
-            filename = f'Panel_Estadistico_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
+            # --- GUARDAR ---
+            filename = f'Panel_Reporte_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
             save_path = os.path.join(output_dir, filename)
             
-            # Guardamos con facecolor='white' explícitamente
-            plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+            plt.savefig(save_path, dpi=200, bbox_inches='tight', facecolor='white')
             plt.close(fig)
             
-            QMessageBox.information(self, "Éxito", f"Imagen guardada en:\n{save_path}")
-            if hasattr(self, 'status_bar'):
-                self.status_bar.set_status(f"📊 Gráfico se han generado en:\n{save_path}", "success")
+            QMessageBox.information(self, "Éxito", f"Reporte generado:\n{save_path}")
             
-        except ImportError:
-            QMessageBox.warning(self, "Error", "Falta librería matplotlib.")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error exportando imagen:\n{e}")
-            if hasattr(self, 'status_bar'):
-                self.status_bar.set_status(f"❌ Error generando los gráficos.", "error")
-            logger.error(f"Error export statistics: {e}")
+            # Abrir carpeta automáticamente
+            try: os.startfile(output_dir)
+            except: pass
 
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error generando reporte:\n{e}")
+            logger.error(f"Export Error: {e}")
+            
     def export_to_csv(self):
         """
         Exporta a CSV leyendo DIRECTAMENTE la estructura real de la Base de Datos.
@@ -4942,309 +4957,302 @@ class MainWindow(QMainWindow):
             
     def export_stats_pdf(self):
         """
-        Genera un REPORTE CIENTÍFICO COMPLETO:
-        - Resumen Estadístico (Tablas)
-        - Gráficos HD (Matplotlib)
-        - Tabla de Datos (Últimos registros)
+        📄 GENERADOR DE INFORME PDF CIENTÍFICO (V2.0):
+        - Incluye Resumen Estadístico.
+        - Gráficos de Alta Resolución (Histogramas + Curvas Gompertz).
+        - Tabla de Datos Recientes.
         """
-        # 1. Configurar directorio de reportes (ANTES del diálogo)
+
+        # 1. Configurar directorio
         try:
             report_dir = getattr(Config, 'REPORTS_DIR', os.path.join("Resultados", "Reportes"))
         except:
             report_dir = os.path.join("Resultados", "Reportes")
-        
         os.makedirs(report_dir, exist_ok=True)
         
         # 2. Diálogo de guardado
-        default_name = f"Informe_Trazabilidad_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+        default_name = f"Informe_Tecnico_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
         default_path = os.path.join(report_dir, default_name)
         
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Exportar Informe Completo", default_path, "PDF Files (*.pdf)"
-        )
-        if not path: 
-            return
+        path, _ = QFileDialog.getSaveFileName(self, "Exportar Informe PDF", default_path, "PDF Files (*.pdf)")
+        if not path: return
 
-        # 3. Obtener datos (Mapeo Seguro)
-        measurements = self.db.get_filtered_measurements(limit=2000)
+        # 3. Obtener datos
+        measurements = self.db.get_filtered_measurements(limit=3000)
         if not measurements:
             QMessageBox.warning(self, "Sin Datos", "No hay registros para generar el informe.")
             return
 
-        # Directorio temporal para gráficos (evitar conflictos)
-        temp_plots_dir = os.path.join(report_dir, "_temp_plots")
+        # Directorio temporal para imágenes del PDF
+        temp_plots_dir = os.path.join(report_dir, "_temp_pdf_plots")
         os.makedirs(temp_plots_dir, exist_ok=True)
 
         try:
-                        
-            # --- MAPEO SEGURO DE DATOS ---
+            # --- HELPERS DE EXTRACCIÓN ---
             col_map = {col: i for i, col in enumerate(MEASUREMENT_COLUMNS)}
             
-            def get_val(m, field, default=0.0):
-                if field in col_map:
-                    idx = col_map[field]
-                    if idx < len(m):
-                        v = m[idx]
-                        if v is None or v == "": return default
-                        try: return float(v)
-                        except: return default
-                return default
+            def get_val(row, col_name):
+                idx = col_map.get(col_name)
+                if idx is not None and idx < len(row):
+                    try: return float(row[idx] or 0)
+                    except: pass
+                return 0.0
 
-            def get_str(m, field):
-                if field in col_map:
-                    idx = col_map[field]
-                    if idx < len(m): return str(m[idx]) if m[idx] else ""
+            def get_str(row, col_name):
+                idx = col_map.get(col_name)
+                if idx is not None and idx < len(row): return str(row[idx] or "")
                 return ""
 
-            # Extraer listas limpias para estadísticas
+            def get_date(row):
+                idx = col_map.get('timestamp')
+                if idx is not None and idx < len(row):
+                    try: return datetime.fromisoformat(str(row[idx]))
+                    except: pass
+                return None
+
+            # Extracción
             lengths = [get_val(m, 'length_cm') for m in measurements if get_val(m, 'length_cm') > 0]
             weights = [get_val(m, 'weight_g') for m in measurements if get_val(m, 'weight_g') > 0]
-            heights = []
-            widths = []
-            
-            # Lógica de prioridad manual/auto
+            heights, widths = [], []
             for m in measurements:
-                h = get_val(m, 'manual_height_cm')
-                if h <= 0: h = get_val(m, 'height_cm')
+                h = get_val(m, 'manual_height_cm') or get_val(m, 'height_cm')
+                w = get_val(m, 'manual_width_cm') or get_val(m, 'width_cm')
                 if h > 0: heights.append(h)
-                
-                w = get_val(m, 'manual_width_cm')
-                if w <= 0: w = get_val(m, 'width_cm')
                 if w > 0: widths.append(w)
 
-            # 4. CONFIGURACIÓN DEL DOCUMENTO PDF
+            # --- CONFIGURACIÓN PDF ---
             doc = SimpleDocTemplate(path, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
             styles = getSampleStyleSheet()
             
-            # Estilos personalizados
-            title_style = ParagraphStyle('MainTitle', parent=styles['Title'], fontSize=18, alignment=TA_CENTER, spaceAfter=10, textColor=colors.HexColor('#2c3e50'))
-            subtitle_style = ParagraphStyle('SubTitle', parent=styles['Normal'], fontSize=12, alignment=TA_CENTER, textColor=colors.HexColor('#7f8c8d'))
-            h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontSize=14, spaceBefore=15, spaceAfter=10, textColor=colors.HexColor('#2980b9'))
-            normal_style = styles['Normal']
-            
-            elements = []
+            title_style = ParagraphStyle('MainTitle', parent=styles['Title'], fontSize=16, alignment=TA_CENTER, textColor=colors.HexColor('#2c3e50'))
+            subtitle_style = ParagraphStyle('SubTitle', parent=styles['Normal'], fontSize=10, alignment=TA_CENTER, textColor=colors.HexColor('#7f8c8d'))
+            h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontSize=12, spaceBefore=15, spaceAfter=8, textColor=colors.HexColor('#2980b9'))
 
-            # --- ENCABEZADO ---
-            elements.append(Paragraph("INFORME TÉCNICO DE TRAZABILIDAD", title_style))
-            elements.append(Paragraph(f"Proyecto LESTOMA - Laboratorio de Biometría", subtitle_style))
-            elements.append(Paragraph(f"Fecha de Emisión: {datetime.now().strftime('%d/%m/%Y %H:%M')}", subtitle_style))
+            elements = []
+            elements.append(Paragraph("INFORME TÉCNICO DE CRECIMIENTO", title_style))
+            elements.append(Paragraph(f"Generado el: {datetime.now().strftime('%d/%m/%Y %H:%M')}", subtitle_style))
             elements.append(Spacer(1, 20))
 
-            # --- SECCIÓN 1: RESUMEN ESTADÍSTICO (TABLA) ---
-            elements.append(Paragraph("1. Resumen Estadístico Descriptivo", h2_style))
+            # --- 1. TABLA RESUMEN ---
+            elements.append(Paragraph("1. Resumen Estadístico", h2_style))
             
-            # Función auxiliar para calcular fila de tabla
-            def calc_row(name, data, unit):
-                if not data: return [name, "0", "-", "-", "-", "-"]
-                return [
-                    name,
-                    str(len(data)),
-                    f"{np.mean(data):.2f} {unit}",
-                    f"{np.min(data):.2f} {unit}",
-                    f"{np.max(data):.2f} {unit}",
-                    f"{np.std(data):.2f}"
-                ]
+            def calc_row(name, d, unit):
+                if not d: return [name, "0", "-", "-", "-"]
+                return [name, str(len(d)), f"{np.mean(d):.2f} {unit}", f"{np.min(d):.2f} {unit}", f"{np.max(d):.2f} {unit}"]
 
-            table_data = [
-                ['Variable', 'N', 'Promedio', 'Mínimo', 'Máximo', 'Desv. Est.']
-            ]
-            table_data.append(calc_row("Longitud", lengths, "cm"))
-            table_data.append(calc_row("Peso", weights, "g"))
-            table_data.append(calc_row("Altura", heights, "cm"))
-            table_data.append(calc_row("Ancho", widths, "cm"))
-
-            # Estilo de la tabla
-            t = Table(table_data, colWidths=[100, 50, 90, 90, 90, 70])
+            t_data = [['Variable', 'N', 'Promedio', 'Mínimo', 'Máximo']]
+            t_data.append(calc_row("Longitud", lengths, "cm"))
+            t_data.append(calc_row("Peso", weights, "g"))
+            t_data.append(calc_row("Altura", heights, "cm"))
+            
+            t = Table(t_data, colWidths=[100, 60, 100, 100, 100])
             t.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#34495e')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#ecf0f1')),
-                ('GRID', (0, 0), (-1, -1), 1, colors.white),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.HexColor('#e8e8e8')])
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#34495e')),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.whitesmoke, colors.HexColor('#ecf0f1')])
             ]))
             elements.append(t)
-            elements.append(Spacer(1, 25))
+            elements.append(Spacer(1, 20))
 
-            # --- SECCIÓN 2: ANÁLISIS GRÁFICO ---
-            elements.append(Paragraph("2. Análisis Gráfico (Distribuciones)", h2_style))
+            # --- 2. GRÁFICOS CIENTÍFICOS ---
+            elements.append(Paragraph("2. Análisis de Crecimiento", h2_style))
             
-            # Configurar Matplotlib
+            # Config Matplotlib
             plt.style.use('default')
             plt.rcParams.update({'font.size': 9})
 
-            def add_plot(data, title, xlabel, color, suffix):
-                if not data: return
-                fig, ax = plt.subplots(figsize=(7, 3.5), dpi=300)
-                ax.hist(data, bins=20, color=color, alpha=0.75, edgecolor='black', linewidth=0.5)
-                ax.axvline(np.mean(data), color='red', linestyle='--', linewidth=1, label='Media')
-                ax.set_title(title, fontweight='bold', fontsize=10)
-                ax.set_xlabel(xlabel)
-                ax.set_ylabel("Frecuencia")
-                ax.grid(True, linestyle=':', alpha=0.5)
-                ax.legend()
-                
-                fpath = os.path.join(temp_plots_dir, f"p_{suffix}.png")
-                plt.savefig(fpath, bbox_inches='tight')
-                plt.close(fig)
-                elements.append(Image(fpath, width=450, height=225))
-                elements.append(Spacer(1, 10))
-
-            add_plot(lengths, "Distribución de Longitudes", "cm", "#3498db", "len")
-            add_plot(weights, "Distribución de Pesos", "g", "#e67e22", "wgt")
+            # A. HISTOGRAMAS LADO A LADO
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 3.5), dpi=200)
+            if lengths:
+                ax1.hist(lengths, bins=15, color='#3498db', alpha=0.7, edgecolor='black')
+                ax1.set_title("Longitudes"); ax1.set_xlabel("cm")
+            if weights:
+                ax2.hist(weights, bins=15, color='#2ecc71', alpha=0.7, edgecolor='black')
+                ax2.set_title("Pesos"); ax2.set_xlabel("g")
             
-            # Correlación (Si hay datos)
-            if lengths and weights:
-                elements.append(Spacer(1, 10))
-                fig, ax = plt.subplots(figsize=(7, 3.5), dpi=300)
-                min_len = min(len(lengths), len(weights))
-                ax.scatter(lengths[:min_len], weights[:min_len], alpha=0.6, c='#27ae60', edgecolors='black', s=20)
-                ax.set_title("Relación Longitud vs. Peso")
-                ax.set_xlabel("Longitud (cm)")
-                ax.set_ylabel("Peso (g)")
-                ax.grid(True, alpha=0.3)
-                fpath = os.path.join(temp_plots_dir, "p_corr.png")
-                plt.savefig(fpath, bbox_inches='tight')
-                plt.close(fig)
-                elements.append(Image(fpath, width=450, height=225))
+            dist_path = os.path.join(temp_plots_dir, "dist.png")
+            plt.savefig(dist_path, bbox_inches='tight')
+            plt.close(fig)
+            elements.append(Image(dist_path, width=450, height=200))
+            elements.append(Spacer(1, 10))
 
+            # B. CURVA DE CRECIMIENTO INTELIGENTE (GOMPERTZ)
+            fig, ax = plt.subplots(figsize=(8, 4), dpi=200)
+            
+            # Agrupar datos semanales
+            weekly_w = {}
+            for m in measurements:
+                w = get_val(m, 'weight_g')
+                dt = get_date(m)
+                if w > 0 and dt:
+                    monday = dt.date() - timedelta(days=dt.date().weekday())
+                    weekly_w[monday] = weekly_w.get(monday, []) + [w]
+
+            if weekly_w:
+                sorted_d = sorted(weekly_w.keys())
+                dts = [datetime.combine(d, datetime.min.time()) for d in sorted_d]
+                avgs = np.array([sum(weekly_w[d])/len(weekly_w[d]) for d in sorted_d])
+                
+                ax.plot(dts, avgs, 'o', color='#8e44ad', label='Promedio Semanal')
+
+                # MATEMÁTICA
+                if len(avgs) >= 2:
+                    start = dts[0]
+                    days_rel = np.array([(d - start).days for d in dts])
+                    last = days_rel[-1]
+                    fut = np.linspace(0, last + 45, 100)
+                    y_trend = None
+                    lbl = ""
+
+                    try: # Gompertz
+                        if len(avgs) >= 3:
+                            def gompertz(t, A, B, k): return A * np.exp(-np.exp(B - k*t))
+                            mx = max(avgs)
+                            p0 = [mx*1.5, 1.0, 0.02]
+                            bounds = ([mx, -10, 0], [np.inf, 10, 1.0])
+                            popt, _ = curve_fit(gompertz, days_rel, avgs, p0=p0, bounds=bounds, maxfev=5000)
+                            cand = gompertz(fut, *popt)
+                            if cand[-1] < mx * 4:
+                                y_trend = cand
+                                lbl = "Modelo Gompertz"
+                    except: pass
+
+                    if y_trend is None: # Lineal
+                        z = np.polyfit(days_rel, avgs, 1)
+                        y_trend = np.poly1d(z)(fut)
+                        lbl = "Tendencia Lineal"
+
+                    fut_dates = [start + timedelta(days=x) for x in fut]
+                    ax.plot(fut_dates, y_trend, '--', color='#2c3e50', linewidth=2, label=lbl)
+                    
+                    final = y_trend[-1]
+                    if final < 100000:
+                        ax.text(fut_dates[-1], final, f"{final:.1f}g", fontweight='bold')
+
+                ax.set_title("Proyección de Crecimiento (Biomasa)")
+                ax.set_ylabel("Peso (g)")
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%b'))
+                ax.legend()
+                ax.grid(True, linestyle=':', alpha=0.5)
+
+            evo_path = os.path.join(temp_plots_dir, "evo.png")
+            plt.savefig(evo_path, bbox_inches='tight')
+            plt.close(fig)
+            elements.append(Image(evo_path, width=450, height=225))
             elements.append(PageBreak())
 
-            # --- SECCIÓN 3: REGISTRO DE DATOS (TABLA DE MUESTRA) ---
-            elements.append(Paragraph("3. Registro Detallado (Últimos 50)", h2_style))
+            # --- 3. REGISTRO DE DATOS ---
+            elements.append(Paragraph("3. Últimos Registros (Muestra)", h2_style))
             
-            data_rows = [['ID', 'Fecha/Hora', 'Largo (cm)', 'Peso (g)', 'Altura (cm)', 'Ancho (cm)']]
-            
-            sorted_measurements = sorted(measurements, key=lambda x: get_str(x, 'timestamp'), reverse=True)[:50]
+            data_rows = [['ID', 'Fecha', 'Largo', 'Peso', 'Ancho']]
+            sorted_m = sorted(measurements, key=lambda x: get_str(x, 'timestamp'), reverse=True)[:40]
 
-            for m in sorted_measurements:
-                l = get_val(m, 'length_cm')
-                w = get_val(m, 'weight_g')
-                
-                h = get_val(m, 'manual_height_cm')
-                if h <= 0: h = get_val(m, 'height_cm')
-                
-                wid = get_val(m, 'manual_width_cm')
-                if wid <= 0: wid = get_val(m, 'width_cm')
-
-                ts = get_str(m, 'timestamp')
-                try: ts_short = ts.split("T")[0]
-                except: ts_short = ts
-
-                fish_id = get_str(m, 'fish_id')
-
+            for m in sorted_m:
+                ts = get_str(m, 'timestamp').split("T")[0]
                 data_rows.append([
-                    str(fish_id),
-                    ts_short,
-                    f"{l:.2f}",
-                    f"{w:.2f}" if w > 0 else "-",
-                    f"{h:.2f}" if h > 0 else "-",
-                    f"{wid:.2f}" if wid > 0 else "-"
+                    str(get_val(m, 'fish_id')),
+                    ts,
+                    f"{get_val(m, 'length_cm'):.2f}",
+                    f"{get_val(m, 'weight_g'):.2f}",
+                    f"{get_val(m, 'width_cm'):.2f}"
                 ])
 
-            t_data = Table(data_rows, colWidths=[60, 90, 70, 70, 70, 70])
-            t_data.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2980b9')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f2f2f2')])
+            t_rec = Table(data_rows, colWidths=[60, 90, 80, 80, 80])
+            t_rec.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2980b9')),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#f2f2f2')]),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey)
             ]))
-            elements.append(t_data)
-            
-            elements.append(Spacer(1, 20))
-            elements.append(Paragraph("Nota: Esta tabla muestra solo los últimos 50 registros para optimizar el tamaño del reporte.", subtitle_style))
+            elements.append(t_rec)
 
-            # 5. GENERAR PDF
+            # GENERAR
             doc.build(elements)
             
-            # 6. Limpiar archivos temporales DESPUÉS de generar el PDF
-            try:
-                shutil.rmtree(temp_plots_dir)
-            except: 
-                pass
+            # Limpieza
+            try: shutil.rmtree(temp_plots_dir)
+            except: pass
 
-            QMessageBox.information(
-                self, "Informe Creado", 
-                f"✅ El informe completo se ha generado en:\n{path}"
-            )
-            if hasattr(self, 'status_bar'):
-                self.status_bar.set_status(f"📊 Informe completo se ha generado en:\n{path}", "success")
+            QMessageBox.information(self, "Éxito", f"Informe PDF generado:\n{path}")
 
-        except ImportError as ie:
-            QMessageBox.critical(
-                self, "Error", 
-                f"Falta librería requerida.\n\nInstala con:\npip install reportlab matplotlib numpy"
-            )
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error crítico generando PDF:\n{e}")
-            logger.error(f"PDF Error: {e}", exc_info=True)
-            if hasattr(self, 'status_bar'):
-                self.status_bar.set_status(f"❌ Error generando el PDF.", "error")
-
-        finally:
-            # Asegurar limpieza incluso si hay errores
-            try:
-                if os.path.exists(temp_plots_dir):
-                    shutil.rmtree(temp_plots_dir)
-            except:
-                pass
-             
+            QMessageBox.critical(self, "Error", f"Error PDF:\n{e}")
+            try: shutil.rmtree(temp_plots_dir)
+            except: pass  
+            
     def generate_statistics(self):
         """
-        🚀 MOTOR ANALÍTICO: Procesa datos y genera el Dashboard visual.
+        🚀 MOTOR ANALÍTICO: Procesa datos (priorizando manuales) y coordina el Dashboard.
         """
         if hasattr(self, 'stats_text'):
             self.stats_text.clear()
         if hasattr(self, 'gallery_list'):
             self.gallery_list.clear()
         
-        # 1. Obtención de datos con Mapeo Dinámico
         measurements = self.db.get_filtered_measurements(limit=2000)
         
         if not measurements:
-            self.stats_text.setHtml("<h3 style='color:#e74c3c; text-align:center;'>⚠️ No hay registros para analizar.</h3>")
+            if hasattr(self, 'stats_text'):
+                self.stats_text.setHtml("<h3 style='color:#e74c3c; text-align:center;'>⚠️ No hay registros para analizar.</h3>")
             return
 
-        # 2. Extracción segura (Prevención de errores de tipo)
-        lengths, weights, dates, dates_lengths = [], [], [], []
+        lengths, weights, dates = [], [], []
+        dates_lengths = [] 
+        dates_weights = []
         
         for m in measurements:
             try:
-                # Extraemos forzando el tipo float para cálculos matemáticos
-                l = float(self.db.get_field_value(m, 'length_cm', 0))
-                w = float(self.db.get_field_value(m, 'weight_g', 0))
-                ts = self.db.get_field_value(m, 'timestamp', "")
+                
+                l_auto = float(self.db.get_field_value(m, 'length_cm', 0) or 0)
+                l_man = float(self.db.get_field_value(m, 'manual_length_cm', 0) or 0)
+                l = l_man if l_man > 0 else l_auto
 
-                if l > 0:
-                    lengths.append(l)
-                    if ts:
+                w_auto = float(self.db.get_field_value(m, 'weight_g', 0) or 0)
+                w_man = float(self.db.get_field_value(m, 'manual_weight_g', 0) or 0)
+                w = w_man if w_man > 0 else w_auto
+
+                ts_str = self.db.get_field_value(m, 'timestamp', "")
+                
+                dt_obj = None
+                if ts_str:
+                    try:
+                        dt_obj = datetime.fromisoformat(str(ts_str))
+                    except:
                         try:
-                            dates.append(datetime.fromisoformat(str(ts)))
-                            dates_lengths.append(l)
+                            dt_obj = datetime.strptime(str(ts_str), "%Y-%m-%d %H:%M:%S")
                         except: pass
-                if w > 0:
-                    weights.append(w)
-            except: continue 
 
-        # 3. Guardar estado para persistencia en el reporte
+                if l > 0 and dt_obj:
+                    lengths.append(l)
+                    dates_lengths.append(dt_obj)
+                
+                if w > 0 and dt_obj:
+                    weights.append(w)
+                    dates_weights.append(dt_obj) 
+                    dates.append(dt_obj) 
+
+            except Exception as e:
+                continue 
+
         self.current_stats_data = {
             'count': len(measurements),
             'lengths': lengths,
             'weights': weights,
             'dates': dates,
-            'dates_lengths': dates_lengths,
+            
+            'dates_for_lengths': dates_lengths,
+            'dates_for_weights': dates_weights,
+            
             'heights': [l*0.3 for l in lengths], 
             'widths': [l*0.15 for l in lengths]   
         }
 
-        # 4. Actualizar Visuales
-        self.update_report_html()
+        self.update_report_html() 
         self.generate_graphs()
+        
         if hasattr(self, 'status_bar'):
             self.status_bar.set_status(f"📊 Análisis de {len(measurements)} muestras completado", "success")
         
@@ -5330,52 +5338,239 @@ class MainWindow(QMainWindow):
         </div>
         """
         self.stats_text.setHtml(html)
-        
+
     def generate_graphs(self):
-        """Genera los 4 gráficos principales para la galería."""
-        self.gallery_list.clear()
-        if not hasattr(self, 'current_stats_data') or not self.current_stats_data:
+        """
+        🧬 PINTOR DE GRÁFICAS (INTELIGENTE CON PLAN B):
+        - Intenta Gompertz (Modelo Biológico).
+        - Si Gompertz falla o da resultados locos -> FALLBACK A LINEAL (Plan B).
+        - Proyección a futuro segura.
+        """
+
+        data = getattr(self, 'current_stats_data', None)
+        if not data or not data['lengths']:
             return
 
-        data = self.current_stats_data
-        plt.style.use('default')
+        plt.style.use('seaborn-v0_8-whitegrid')
+        self.gallery_list.clear()
 
-        # 1. Histograma Longitudes
-        if data['lengths']:
-            fig, ax = plt.subplots(figsize=(5, 4))
-            ax.hist(data['lengths'], bins=15, color='#3498db', edgecolor='black', alpha=0.7)
-            ax.set_title("Distribución de Longitudes")
-            self.add_graph_to_gallery(fig, "Longitudes")
-            plt.close(fig)
+        # ----------------------------------------------------------------------
+        # 1. AGRUPACIÓN SEMANAL
+        # ----------------------------------------------------------------------
+        weekly_weights = {}
+        weekly_lengths = {}
+        
+        def get_monday(d):
+            return d - timedelta(days=d.weekday())
 
-        # 2. Histograma Pesos
-        if data['weights']:
-            fig, ax = plt.subplots(figsize=(5, 4))
-            ax.hist(data['weights'], bins=15, color='#e67e22', edgecolor='black', alpha=0.7)
-            ax.set_title("Distribución de Pesos")
-            self.add_graph_to_gallery(fig, "Pesos")
-            plt.close(fig)
+        if data['dates_for_weights'] and data['weights']:
+            for dt, w in zip(data['dates_for_weights'], data['weights']):
+                monday = get_monday(dt.date())
+                weekly_weights[monday] = weekly_weights.get(monday, []) + [w]
 
-        # 3. Correlación
-        if data['lengths'] and data['weights']:
-            fig, ax = plt.subplots(figsize=(5, 4))
-            min_len = min(len(data['lengths']), len(data['weights']))
-            ax.scatter(data['lengths'][:min_len], data['weights'][:min_len], color='#27ae60', alpha=0.6)
-            ax.set_title("Relación Peso vs Largo")
-            self.add_graph_to_gallery(fig, "Correlación")
-            plt.close(fig)
+        if data['dates_for_lengths'] and data['lengths']:
+            for dt, l in zip(data['dates_for_lengths'], data['lengths']):
+                monday = get_monday(dt.date())
+                weekly_lengths[monday] = weekly_lengths.get(monday, []) + [l]
 
-        # 4. Línea de Tiempo
-        if len(data['dates']) > 1:
-            fig, ax = plt.subplots(figsize=(5, 4))
-            ax.plot(data['dates'], data['dates_lengths'], marker='o', color='#8e44ad')
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
-            plt.setp(ax.xaxis.get_majorticklabels(), rotation=30)
-            fig.tight_layout()
-            self.add_graph_to_gallery(fig, "Evolución Temporal")
-            plt.close(fig)
- 
-    
+        # ----------------------------------------------------------------------
+        # 2. HELPER: FIGURE -> PIXMAP
+        # ----------------------------------------------------------------------
+        def fig_to_pixmap(figure):
+            buf = io.BytesIO()
+            figure.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+            buf.seek(0)
+            qimg = QImage.fromData(buf.getvalue())
+            plt.close(figure)
+            return QPixmap.fromImage(qimg)
+
+        # ----------------------------------------------------------------------
+        # 3. HELPER MATEMÁTICO (GOMPERTZ -> LINEAL)
+        # ----------------------------------------------------------------------
+        def plot_bio_trend(ax, date_dict, color_line, label, unit):
+            sorted_weeks = sorted(date_dict.keys())
+            if not sorted_weeks: return
+            
+            sorted_dts = [datetime.combine(d, datetime.min.time()) for d in sorted_weeks]
+            avg_vals = np.array([sum(date_dict[d])/len(date_dict[d]) for d in sorted_weeks])
+
+            # Tiempo Relativo (Días 0, 7, 14...)
+            start_date = sorted_dts[0]
+            days_since_start = np.array([(d - start_date).days for d in sorted_dts])
+
+            # Graficar Puntos Reales
+            ax.plot(sorted_dts, avg_vals, 'o', color=color_line, markersize=7, alpha=0.8, label=f'{label} (Promedio)')
+
+            # --- DEFINICIÓN DE MODELOS ---
+            def model_gompertz(t, A, B, k):
+                return A * np.exp(-np.exp(B - k * t))
+
+            # Variables para el resultado
+            last_day = days_since_start[-1]
+            future_days = np.linspace(0, last_day + 45, 100) # Proyección 45 días
+            y_trend = None
+            model_used = ""
+
+            # --- INTENTO 1: GOMPERTZ ---
+            try:
+                if len(avg_vals) >= 3:
+                    max_val = max(avg_vals)
+                    # Estimaciones iniciales
+                    p0 = [max_val * 1.5, 1.0, 0.02]
+                    bounds = ([max_val, -10, 0], [np.inf, 10, 1.0])
+                    
+                    params, _ = curve_fit(model_gompertz, days_since_start, avg_vals, p0=p0, bounds=bounds, maxfev=5000)
+                    y_candidate = model_gompertz(future_days, *params)
+                    
+                    # CHEQUEO DE CORDURA (Sanity Check)
+                    # Si predice que el peso se triplicará en 1 mes, es un error matemático.
+                    prediction_last = y_candidate[-1]
+                    if prediction_last > max_val * 3:
+                        raise ValueError(f"Predicción exagerada ({prediction_last}), descartando Gompertz.")
+                    
+                    y_trend = y_candidate
+                    model_used = "Gompertz"
+                else:
+                    raise ValueError("Pocos datos para Gompertz")
+
+            except Exception as e:
+                # print(f"Fallo Gompertz ({e}), activando Plan B...")
+                y_trend = None # Forzar fallback
+
+            # --- INTENTO 2: PLAN B (LINEAL) ---
+            if y_trend is None:
+                try:
+                    if len(avg_vals) >= 2:
+                        # Ajuste Lineal (y = mx + b)
+                        coeffs = np.polyfit(days_since_start, avg_vals, 1)
+                        poly_eq = np.poly1d(coeffs)
+                        y_trend = poly_eq(future_days)
+                        model_used = "Lineal (Plan B)"
+                except: pass
+
+            # --- DIBUJAR ---
+            if y_trend is not None:
+                future_dates = [start_date + timedelta(days=d) for d in future_days]
+                ax.plot(future_dates, y_trend, '--', color=color_line, linewidth=2, alpha=0.6, label=f'Tendencia {model_used}')
+                
+                final_val = y_trend[-1]
+                final_date = future_dates[-1]
+                
+                # Evitar etiquetas infinitas
+                if not np.isinf(final_val) and final_val < 100000:
+                    ax.text(final_date, final_val, f"{final_val:.1f} {unit}", 
+                            color=color_line, fontweight='bold', fontsize=9, ha='left')
+                
+                ax.set_xlim(sorted_dts[0] - timedelta(days=5), final_date + timedelta(days=7))
+
+            # Estética Eje X
+            ax.xaxis.set_major_locator(mdates.WeekdayLocator(interval=1))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%b'))
+            ax.grid(True, axis='x', linestyle=':', alpha=0.5)
+
+        # ----------------------------------------------------------------------
+        # 4. GENERACIÓN DE GRÁFICAS
+        # ----------------------------------------------------------------------
+
+        # Tallas
+        try:
+            fig, ax = plt.subplots(figsize=(8, 5))
+            ax.hist(data['lengths'], bins=10, color='#3498db', alpha=0.7, edgecolor='black')
+            ax.set_title("Distribución de Tallas", fontweight='bold')
+            ax.set_xlabel("Longitud (cm)"); ax.set_ylabel("Frecuencia")
+            self._add_to_gallery("📏 Distribución Tallas", fig_to_pixmap(fig))
+        except: pass
+
+        # Pesos
+        try:
+            if data['weights']:
+                fig, ax = plt.subplots(figsize=(8, 5))
+                ax.hist(data['weights'], bins=10, color='#2ecc71', alpha=0.7, edgecolor='black')
+                ax.set_title("Distribución de Biomasa", fontweight='bold')
+                ax.set_xlabel("Peso (g)"); ax.set_ylabel("Frecuencia")
+                self._add_to_gallery("⚖️ Distribución Peso", fig_to_pixmap(fig))
+        except: pass
+
+        # Curva Peso
+        try:
+            if weekly_weights:
+                fig, ax = plt.subplots(figsize=(11, 5))
+                plot_bio_trend(ax, weekly_weights, '#9b59b6', 'Peso', 'g')
+                ax.set_title("Proyección de Crecimiento (Peso)", fontweight='bold')
+                ax.set_ylabel("Peso (g)"); ax.legend()
+                fig.autofmt_xdate(rotation=45, ha='right')
+                self._add_to_gallery("⏱ Crecimiento Peso", fig_to_pixmap(fig))
+        except Exception as e: print(f"Error Peso: {e}")
+
+        # Curva Longitud
+        try:
+            if weekly_lengths:
+                fig, ax = plt.subplots(figsize=(11, 5))
+                plot_bio_trend(ax, weekly_lengths, '#e67e22', 'Longitud', 'cm')
+                ax.set_title("Proyección de Crecimiento (Longitud)", fontweight='bold')
+                ax.set_ylabel("Longitud (cm)"); ax.legend()
+                fig.autofmt_xdate(rotation=45, ha='right')
+                self._add_to_gallery("📏 Crecimiento Talla", fig_to_pixmap(fig))
+        except Exception as e: print(f"Error Longitud: {e}")
+
+        # Scatter
+        try:
+            if len(data['lengths']) == len(data['weights']) and data['weights']:
+                fig, ax = plt.subplots(figsize=(8, 5))
+                ax.scatter(data['lengths'], data['weights'], c='#e74c3c', alpha=0.6)
+                ax.set_title("Relación Longitud / Peso", fontweight='bold')
+                ax.set_xlabel("Longitud (cm)"); ax.set_ylabel("Peso (g)")
+                self._add_to_gallery("📈 Salud (L vs P)", fig_to_pixmap(fig))
+        except: pass
+    def _add_to_gallery(self, title, pixmap):
+        """Añade un gráfico a la galería usando un QPixmap en memoria."""
+        item = QListWidgetItem(title)
+        icon = QIcon(pixmap)
+        item.setIcon(icon)
+        item.setSizeHint(QSize(200, 180))
+        
+        # Guardamos el Pixmap entero en la memoria del ítem
+        item.setData(Qt.ItemDataRole.UserRole, pixmap)
+        
+        self.gallery_list.addItem(item)
+
+    def open_enlarged_graph(self, item):
+        """Abre el visor usando el QPixmap almacenado en memoria."""
+        pixmap = item.data(Qt.ItemDataRole.UserRole)
+        title = item.text()
+        
+        if not pixmap or pixmap.isNull():
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Visualización: {title}")
+        dialog.setMinimumSize(900, 650) 
+        
+        layout = QVBoxLayout(dialog)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        
+        lbl_image = QLabel()
+        lbl_image.setPixmap(pixmap.scaled(
+            dialog.size() * 0.95, 
+            Qt.AspectRatioMode.KeepAspectRatio, 
+            Qt.TransformationMode.SmoothTransformation
+        ))
+        lbl_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        scroll_area.setWidget(lbl_image)
+        layout.addWidget(scroll_area)
+
+        btn_close = QPushButton("Cerrar")
+        btn_close.setProperty("class", "warning") 
+        btn_close.style().unpolish(btn_close)
+        btn_close.style().polish(btn_close)
+        btn_close.setToolTip("Cerrar el visor de imágenes.")
+        btn_close.clicked.connect(dialog.accept)
+        layout.addWidget(btn_close)
+        
+        dialog.exec()
     
     def save_config(self):
         Config.CAM_LEFT_INDEX = self.spin_cam_left.value()

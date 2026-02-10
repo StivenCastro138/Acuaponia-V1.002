@@ -14,14 +14,18 @@ class Config:
     """
 
     # ==========================================================================
-    # API EXTERNA
+    # API EXTERNA Y SEGURIDAD
     # ==========================================================================
 
-    # Clave de acceso a la API de MoonDream (cargada desde variables de entorno)
+    # 1. MoonDream (IA para detección/análisis)
     MOONDREAM_API_KEY = os.getenv("MOONDREAM_API_KEY")
-    # Windows (PowerShell como Administrador):
-    # [System.Environment]::SetEnvironmentVariable("MOONDREAM_API_KEY", "TU_CLAVE_AQUI", "Machine")
-
+    
+    # 2. Ngrok (Para poner la API en línea)
+    NGROK_AUTHTOKEN = os.getenv("NGROK_AUTHTOKEN")
+    
+    # --- INSTRUCCIONES PARA WINDOWS (PowerShell como Administrador) ---
+    # [System.Environment]::SetEnvironmentVariable("MOONDREAM_API_KEY", "TU_CLAVE_MOONDREAM", "Machine")
+    # [System.Environment]::SetEnvironmentVariable("NGROK_AUTHTOKEN", "TU_TOKEN_NGROK", "Machine")
     # ==========================================================================
     # CONFIGURACIÓN DE CÁMARAS
     # ==========================================================================
@@ -162,6 +166,7 @@ class Config:
 
     OUT_DIR = os.path.join(BASE_DIR, "Resultados")
     DB_DIR = os.path.join(BASE_DIR, "BaseDeDatos")
+    DB_NAME = os.path.join(DB_DIR, "database.db")
     LOG_DIR = os.path.join(BASE_DIR, "Eventos")
 
     CONFIG_FILE = os.path.join(BASE_DIR, "config.json")

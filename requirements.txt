@@ -27,7 +27,9 @@ darkdetect>=0.7.1,<0.8.0
 
 # --- Web / Mobile ---
 Flask>=3.0
+flask-cors>=4.0
 qrcode>=7.4
+pyngrok>=7.0
 
 # --- System / Windows ---
 pywin32>=306
