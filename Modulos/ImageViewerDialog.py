@@ -369,10 +369,10 @@ class ImageViewerDialog(QDialog):
             k_coef = Config.WEIGHT_K
             exp_coef = Config.WEIGHT_EXP
             
-            peso_teorico = k_coef * (length ** exp_coef)
+            peso_referencia = k_coef * (length ** exp_coef)
             diff_pct = 0
-            if peso_teorico > 0:
-                diff_pct = ((weight - peso_teorico) / peso_teorico) * 100
+            if peso_referencia > 0:
+                diff_pct = ((weight - peso_referencia) / peso_referencia) * 100
 
             errores = MeasurementValidator.validate_measurement(metrics)
             
@@ -384,8 +384,14 @@ class ImageViewerDialog(QDialog):
             icono = QMessageBox.Icon.Information if not errores else QMessageBox.Icon.Warning
 
             col_k = "green" if 0.9 <= k_val <= 1.5 else "red"
-            col_diff = "green" if abs(diff_pct) < 15 else "orange"
+            
+            diff_g = weight - peso_referencia
+            diff_pct = (diff_g / peso_referencia) * 100 if peso_referencia > 0 else 0
 
+            col_diff_pct = "green" if abs(diff_pct) < 15 else "orange"
+            col_diff_g = "green" if abs(diff_g) < peso_referencia * 0.15 else "orange"
+
+            FAO_URL = "https://openknowledge.fao.org/server/api/core/bitstreams/b5d13120-be7f-4821-8a18-50e7a5578d77/content"
             reporte_html = f"""
                             <h3 style="margin-top:0;">📋 Auditoría Biométrica</h3>
                             <hr>
@@ -412,8 +418,23 @@ class ImageViewerDialog(QDialog):
                                 <div style="flex:0.8;">
                                     <b>⚖️ Análisis de Peso</b><br>
                                     • Peso IA Estimado: <b>{weight:.1f} g</b><br>
-                                    • Peso Teórico (Tabla): {peso_teorico:.1f} g<br>
-                                    • Desviación: <span style="color:{col_diff};">{diff_pct:+.1f}%</span>
+                                    • Peso de Referencia (
+                                        <a href="{FAO_URL}" target="_blank"
+                                        title="Abrir tabla oficial FAO de referencia biométrica"
+                                        style="color:#2980b9; text-decoration:underline;">
+                                        Tabla FAO
+                                        </a>
+                                    ): {peso_referencia:.1f} g<br>
+
+                                    • Diferencia absoluta vs. referencia FAO:
+                                    <span style="color:{col_diff_g}; font-weight:bold;">
+                                    {diff_g:+.1f} g
+                                    </span><br>
+
+                                    • Desviación relativa vs. referencia FAO:
+                                    <span style="color:{col_diff_pct}; font-weight:bold;">
+                                    {diff_pct:+.1f} %
+                                    </span>
                                 </div>
 
                             </div>
