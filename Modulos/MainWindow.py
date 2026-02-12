@@ -2780,35 +2780,40 @@ class MainWindow(QMainWindow):
         self.table_history.setColumnCount(len(all_columns))
         self.table_history.setHorizontalHeaderLabels(all_columns)
 
-        # Ocultar columnas opcionales al inicio
+        # Ocultar columnas opcionales
         for col in range(len(self.fixed_columns), len(all_columns)):
             self.table_history.setColumnHidden(col, True)
-            
-        # Ajustes de Tabla
+
+        # Ocultar ID técnico
+        self.table_history.setColumnHidden(0, True)
+
+        # Configuración visual
         self.table_history.horizontalHeader().setSectionsMovable(False)
-        self.table_history.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive) 
+        self.table_history.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table_history.horizontalHeader().setStretchLastSection(True)
         self.table_history.setAlternatingRowColors(True)
-        self.table_history.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table_history.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table_history.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table_history.setSelectionMode(QTableWidget.SingleSelection)
         self.table_history.verticalHeader().setVisible(False)
-        self.table_history.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table_history.setEditTriggers(QAbstractItemView.NoEditTriggers)
 
         self.table_history.setToolTip(
             "💡 <b>Acciones rápidas:</b><br><br>"
             "🖱️ <b>Doble clic</b>: Ver imagen de la medición.<br>"
             "🖱️ <b>Clic derecho</b>: Editar registro seleccionado."
         )
-        
+
         self.table_history.cellDoubleClicked.connect(self.view_measurement_image)
         self.table_history.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table_history.customContextMenuRequested.connect(self.edit_from_right_click)
-        
+
+        # Menú para columnas opcionales
         header = self.table_history.horizontalHeader()
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self.show_column_menu)
 
         layout.addWidget(self.table_history)
+        self.load_measurements()
 
         pagination_layout = QHBoxLayout()
         
@@ -2868,6 +2873,81 @@ class MainWindow(QMainWindow):
         
         return widget
     
+    def load_measurements(self):
+        """Carga mediciones en la tabla de historial"""
+
+        self.table_history.setRowCount(0)
+
+        results = self.db.get_filtered_measurements(limit=200)
+
+        for row_data in results:
+            row_position = self.table_history.rowCount()
+            self.table_history.insertRow(row_position)
+
+            # =========================
+            # COLUMNAS FIJAS
+            # =========================
+
+            id_val = self.db.get_field_value(row_data, "id", "")
+            timestamp = self.db.get_field_value(row_data, "timestamp", "")
+            measurement_type = self.db.get_field_value(row_data, "measurement_type", "")
+            fish_id = self.db.get_field_value(row_data, "fish_id", "")
+            length = self.db.get_field_value(row_data, "length_cm", 0)
+            height = self.db.get_field_value(row_data, "height_cm", 0)
+            width = self.db.get_field_value(row_data, "width_cm", 0)
+            weight = self.db.get_field_value(row_data, "weight_g", 0)
+            confidence = self.db.get_field_value(row_data, "confidence_score", 0)
+            notes = self.db.get_field_value(row_data, "notes", "")
+
+            fixed_values = [
+                id_val,
+                timestamp,
+                measurement_type,
+                fish_id,
+                f"{length:.2f}",
+                f"{height:.2f}",
+                f"{width:.2f}",
+                f"{weight:.2f}",
+                "",  # Factor K si lo calculas aparte
+                f"{confidence:.2f}",
+                notes
+            ]
+
+            for col, value in enumerate(fixed_values):
+                item = QTableWidgetItem(str(value))
+
+                # Alinear números a la derecha
+                if col >= 4 and col <= 9:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                else:
+                    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+                self.table_history.setItem(row_position, col, item)
+
+            # =========================
+            # COLUMNAS OPCIONALES
+            # =========================
+
+            optional_map = {
+                "api_air_temp_c": "Temp Aire (°C)",
+                "api_water_temp_c": "Temp Agua (°C)",
+                "api_rel_humidity": "Humedad Rel (%)",
+                "api_abs_humidity_g_m3": "Humedad Abs (g/m3)",
+                "api_ph": "pH",
+                "api_cond_us_cm": "Conductividad (µS/cm)",
+                "api_do_mg_l": "Oxígeno Disuelto (mg/L)",
+                "api_turbidity_ntu": "Turbidez (NTU)"
+            }
+
+            for i, (db_field, _) in enumerate(optional_map.items()):
+                col_index = len(self.fixed_columns) + i
+                value = self.db.get_field_value(row_data, db_field, "")
+
+                item = QTableWidgetItem("" if value == 0 else str(value))
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+                self.table_history.setItem(row_position, col_index, item)
+   
     def show_column_menu(self, position):
         menu = QMenu(self)
 

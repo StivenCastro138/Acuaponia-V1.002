@@ -26,7 +26,7 @@ MEASUREMENT_COLUMNS = (
 
     'api_air_temp_c', 'api_water_temp_c', 
     'api_rel_humidity', 'api_abs_humidity_g_m3',
-    'api_ph', 'api_cond_us_cm', 'api_do_mg_l'
+    'api_ph', 'api_cond_us_cm', 'api_do_mg_l', 'api_turbidity_ntu'
 )
 
 MEASUREMENT_COLUMNS_STR = ', '.join(MEASUREMENT_COLUMNS)
