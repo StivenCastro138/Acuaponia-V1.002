@@ -5,13 +5,20 @@ DESCRIPCIÓN: Formulario avanzado para la modificación de datos históricos.
              Implementa validación en tiempo real (Live Validation) contra modelos
              alométricos para asistir al usuario en la corrección de errores.
 """
-
+import os
+import cv2
+import glob
+import numpy as np
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
                                QLabel, QLineEdit, QDoubleSpinBox, QTextEdit, 
-                               QPushButton, QGroupBox, QWidget, QDateTimeEdit)
+                               QPushButton, QGroupBox, QWidget, QDateTimeEdit, QApplication)
 from PySide6.QtCore import Qt, QDateTime
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from Modulos.MainWindow import MainWindow
 from Modulos.MorphometricAnalyzer import MorphometricAnalyzer
+from Config.Config import Config
 
 class EditMeasurementDialog(QDialog):
     """
@@ -53,6 +60,7 @@ class EditMeasurementDialog(QDialog):
 
     def __init__(self, measurement_data, parent=None):
         super().__init__(parent)
+        self.main_window: 'MainWindow' = parent
         self.setWindowTitle("Editar Registro")
         self.setFixedWidth(500)
         
@@ -97,11 +105,27 @@ class EditMeasurementDialog(QDialog):
         self.dt_edit.setCalendarPopup(True) 
         self.dt_edit.setToolTip("Fecha y Hora en la que se midió el pez.")
 
-        ts_str = str(self.measurement_data.get('timestamp', ''))
-        qdate = QDateTime.fromString(ts_str, "yyyy-MM-dd HH:mm:ss")
-        
-        if not qdate.isValid():
+        ts_str = self.measurement_data.get('timestamp')
+
+        if ts_str:
+            # Intento 1: formato estándar
+            qdate = QDateTime.fromString(ts_str, "yyyy-MM-dd HH:mm:ss")
+            
+            # Intento 2: si viene con milisegundos
+            if not qdate.isValid():
+                qdate = QDateTime.fromString(ts_str, "yyyy-MM-dd HH:mm:ss.zzz")
+                
+            # Intento 3: ISO (muy común en SQLite)
+            if not qdate.isValid():
+                qdate = QDateTime.fromString(ts_str, Qt.ISODate)
+                
+            if not qdate.isValid():
+                qdate = QDateTime.currentDateTime()
+        else:
             qdate = QDateTime.currentDateTime()
+
+        self.dt_edit.setDateTime(qdate)
+
             
         self.dt_edit.setDateTime(qdate)
         info_layout.addRow("Fecha/Hora:", self.dt_edit)
@@ -291,30 +315,203 @@ class EditMeasurementDialog(QDialog):
         self.lbl_weight_expected.setText(text_expected)
 
     def get_updated_data(self):
-        """Retorna el diccionario limpio para la BD"""
-        record_id = self.measurement_data.get('id')
-        new_timestamp = self.dt_edit.dateTime().toString("yyyy-MM-dd HH:mm:ss")
-        
+        """Retorna el diccionario con los datos finales para ser guardados por MainWindow."""
+        # IMPORTANTE: Aquí es donde MainWindow saca la información para el UPDATE de SQL
         return {
-            'id': record_id,  
-            'timestamp': new_timestamp,
+            'id': self.measurement_data.get('id'),
+            'timestamp': self.dt_edit.dateTime().toString("yyyy-MM-dd HH:mm:ss"),
             'fish_id': self.txt_fish_id.text().strip(),
             'measurement_type': 'manual', 
             'notes': self.txt_notes.toPlainText().strip(),
-            
             'length_cm': self.spin_length.value(),
             'manual_length_cm': self.spin_length.value(),
-            
             'weight_g': self.spin_weight.value(),
             'manual_weight_g': self.spin_weight.value(),
-            
             'height_cm': self.spin_height.value(),
             'manual_height_cm': self.spin_height.value(),
-            
             'width_cm': self.spin_width.value(),
             'manual_width_cm': self.spin_width.value(),
-            
             'lat_area_cm2': self.spin_lat_area.value(),
             'top_area_cm2': self.spin_top_area.value(),
-            'volume_cm3': self.spin_volume.value()
+            'volume_cm3': self.spin_volume.value(),
+            # PASO MAESTRO: Enviamos la ruta que actualizamos en el método accept()
+            'image_path': self.measurement_data.get('image_path') 
         }
+        
+    def _find_image_forensic(self, old_path_db):
+        """
+        Busca la imagen usando múltiples estrategias, igual que MainWindow.view_measurement_image()
+        
+        ESTRATEGIA 1: Ruta directa de BD
+        ESTRATEGIA 2: Búsqueda por nombre en Config.IMAGES_*_DIR
+        ESTRATEGIA 3: Búsqueda por timestamp (patrón de fecha)
+        
+        Retorna: ruta absoluta del archivo encontrado, o None
+        """
+        # ──────────────────────────────────────────────────
+        # CASO A: La ruta existe tal cual
+        # ──────────────────────────────────────────────────
+        if old_path_db and os.path.exists(old_path_db):
+            print(f"✅ Imagen encontrada directamente: {old_path_db}")
+            return old_path_db
+        
+        archivo_encontrado = None
+        
+        # ──────────────────────────────────────────────────
+        # CASO B: Búsqueda por NOMBRE DE ARCHIVO
+        # ──────────────────────────────────────────────────
+        if old_path_db:
+            fname = os.path.basename(old_path_db)
+            
+            # Usar Config.IMAGES_*_DIR (rutas absolutas configuradas)
+            posibles = [
+                os.path.join(Config.IMAGES_MANUAL_DIR, fname),
+                os.path.join(Config.IMAGES_AUTO_DIR, fname),
+            ]
+            
+            for p in posibles:
+                if os.path.exists(p):
+                    archivo_encontrado = p
+                    print(f"✅ Imagen encontrada por nombre en: {p}")
+                    break
+        
+        # ──────────────────────────────────────────────────
+        # CASO C: BÚSQUEDA FORENSE POR TIMESTAMP
+        # ──────────────────────────────────────────────────
+        if not archivo_encontrado:
+            ts_str = str(self.measurement_data.get('timestamp', ""))
+            fish_id = str(self.measurement_data.get('fish_id', ""))
+            
+            try:
+                # Convertir "2026-02-11 18:30:00" → "20260211_183000"
+                ts_clean = ts_str.replace("-", "").replace(":", "").replace(" ", "_")
+                key_search = ts_clean[:15]  # Primeros 15 caracteres
+            except:
+                key_search = "INVALIDO"
+            
+            # Directorios donde buscar
+            search_dirs = [
+                Config.IMAGES_MANUAL_DIR,
+                Config.IMAGES_AUTO_DIR,
+                os.getcwd()  # Como último recurso
+            ]
+            
+            if len(key_search) > 10:  # Solo si la fecha parece válida
+                for carpeta in search_dirs:
+                    if not os.path.exists(carpeta):
+                        continue
+                    
+                    # Buscar cualquier JPG que contenga esa fecha exacta
+                    patron = os.path.join(carpeta, f"*{key_search}*.jpg")
+                    coincidencias = glob.glob(patron)
+                    
+                    if coincidencias:
+                        archivo_encontrado = coincidencias[0]
+                        # Preferir el que tenga el mismo ID
+                        for c in coincidencias:
+                            if fish_id in os.path.basename(c):
+                                archivo_encontrado = c
+                                break
+                        print(f"✅ Imagen encontrada por timestamp: {archivo_encontrado}")
+                        break
+        
+        return archivo_encontrado
+    
+    # -------------------------------------------------------------------------
+    # BUSCADOR "A PRUEBA DE FALLOS" DE LA VENTANA PRINCIPAL
+    # -------------------------------------------------------------------------
+    def _find_main_window(self):
+        """Busca la MainWindow de forma segura para usar draw_fish_overlay."""
+        curr = self.parent()
+        while curr:
+            if hasattr(curr, 'draw_fish_overlay'):
+                return curr
+            curr = curr.parent()
+        # Búsqueda global si el parent falló
+        for widget in QApplication.topLevelWidgets():
+            if hasattr(widget, 'draw_fish_overlay'):
+                return widget
+        return None
+
+    def accept(self):
+        """
+        Al dar clic en Guardar:
+        1. Localiza la imagen vieja usando búsqueda forense robusta.
+        2. Genera la nueva imagen con el overlay de texto negro.
+        3. Crea el nuevo nombre de archivo (renombrado).
+        4. Actualiza self.measurement_data para que get_updated_data() la devuelva corregida.
+        """
+        old_path_db = self.measurement_data.get('image_path', '')
+        tipo_orig = self.measurement_data.get('measurement_type', 'MANUAL')
+        main_app = self._find_main_window()
+
+        if not main_app:
+            print("⚠️ No se encontró MainWindow, guardando sin procesar imagen")
+            super().accept()
+            return
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # 🔥 NUEVA LÓGICA: Usar búsqueda forense robusta
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        actual_path = self._find_image_forensic(old_path_db)
+
+        # --- PROCESAMIENTO ---
+        if actual_path:
+            try:
+                # Usamos los valores actuales de los widgets para el dibujo
+                new_fish_id = self.txt_fish_id.text().strip()
+                new_len = self.spin_length.value()
+                new_weight = self.spin_weight.value()
+                new_ts = self.dt_edit.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+
+                # Cargar imagen de forma segura (maneja caracteres Unicode en la ruta)
+                with open(actual_path, "rb") as f:
+                    img = cv2.imdecode(np.frombuffer(f.read(), np.uint8), cv2.IMREAD_UNCHANGED)
+                
+                if img is not None:
+                    # Dibujar Overlay
+                    payload = {
+                        "tipo": "EDITADO", "numero": new_fish_id,
+                        "longitud": new_len, "peso": new_weight, "fecha": new_ts
+                    }
+                    img_new = main_app.draw_fish_overlay(img, payload)
+                    
+                    # Generar nombre nuevo
+                    nuevo_nombre = main_app.generar_nombre_archivo(
+                        tipo_orig, new_fish_id, new_len, 
+                        self.spin_height.value(), self.spin_width.value(), 
+                        new_weight, new_ts
+                    )
+                    
+                    folder = os.path.dirname(actual_path)
+                    new_path = os.path.join(folder, nuevo_nombre)
+                    
+                    # Guardar Físicamente
+                    is_ok, buf = cv2.imencode(".jpg", img_new)
+                    if is_ok:
+                        buf.tofile(new_path)
+                        # Borrar vieja si cambió
+                        if os.path.abspath(actual_path) != os.path.abspath(new_path):
+                            try: 
+                                os.remove(actual_path)
+                                print(f"🗑️ Archivo antiguo eliminado: {actual_path}")
+                            except: 
+                                pass
+                        
+                        # ACTUALIZAR RUTA EN MEMORIA (Para que el padre la guarde en BD)
+                        self.measurement_data['image_path'] = new_path
+                        print(f"✅ Imagen editada y renombrada a: {nuevo_nombre}")
+                else:
+                    print(f"❌ No se pudo decodificar la imagen: {actual_path}")
+                    
+            except Exception as e:
+                print(f"❌ Error en Editor al procesar imagen: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"⚠️ No se encontró la imagen física para editar.")
+            print(f"   Ruta BD: {old_path_db}")
+            print(f"   Fish ID: {self.measurement_data.get('fish_id')}")
+            print(f"   Timestamp: {self.measurement_data.get('timestamp')}")
+
+        super().accept()

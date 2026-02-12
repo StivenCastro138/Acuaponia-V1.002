@@ -77,7 +77,8 @@ class BiometryService:
                 valor_y=y_center_lat,
                 max_y=img_lat.shape[0],
                 escala_frente=scale_lat_front,
-                escala_fondo=scale_lat_back
+                escala_fondo=scale_lat_back,
+                es_cenital=False
             )
 
             px_to_cm_top = 0.0
@@ -87,7 +88,8 @@ class BiometryService:
                     valor_y=y_center_top,
                     max_y=img_top.shape[0],
                     escala_frente=scale_top_front,
-                    escala_fondo=scale_top_back
+                    escala_fondo=scale_top_back,
+                    es_cenital=True
                 )
 
             if px_to_cm_lat <= 0:
@@ -134,11 +136,11 @@ class BiometryService:
             # ============================================================
             # 6. ANOTACIÓN VISUAL
             # ============================================================
-            img_lat_ann = self._draw_result(img_lat, res_lat, (255, 255, 0), "LAT", draw_box, draw_skeleton)
+            img_lat_ann = self._draw_result(img_lat, res_lat, (0, 0, 255), "LAT", draw_box, draw_skeleton)
             
             img_top_ann = img_top.copy()
             if has_top:
-                img_top_ann = self._draw_result(img_top, res_top, (255, 120, 0), "TOP", draw_box, draw_skeleton)
+                img_top_ann = self._draw_result(img_top, res_top, (0, 0, 255), "TOP", draw_box, draw_skeleton)
             
             return metrics, img_lat_ann, img_top_ann
 
@@ -163,7 +165,7 @@ class BiometryService:
 
         # 1. Contorno 
         if result.contour is not None:
-             cv2.drawContours(vis, [result.contour], -1, color, 1)
+             cv2.drawContours(vis, [result.contour], -1, color, 2)
 
         # 2. Caja 
         if show_box and result.bbox:
@@ -174,7 +176,7 @@ class BiometryService:
             txt = f"{label}"
             (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
             cv2.rectangle(vis, (x1, y1 - th - 10), (x1 + tw, y1), color, -1)
-            cv2.putText(vis, txt, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0,0,0), thickness)
+            cv2.putText(vis, txt, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255,255,255), thickness)
 
         # 3. Esqueleto 
         if show_skel and result.spine_visualization is not None:

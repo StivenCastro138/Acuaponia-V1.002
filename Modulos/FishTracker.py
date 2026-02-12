@@ -20,16 +20,42 @@ class FishTracker:
         self.max_length_change = 2.0  
         self.max_cv_threshold = 10.0  
     
-    def update(self, contour, metrics, timestamp=None):
-        """Agrega nueva medición al historial si hay un contorno válido"""
-        if contour is not None and metrics:
-            M = cv2.moments(contour)
+    def update(self, contour_left, contour_top, metrics, timestamp=None):
+        """Actualiza tracking usando ambas vistas (fusión espacial)."""
+
+        if not metrics:
+            return
+
+        centroids = []
+
+        # Lateral
+        if contour_left is not None:
+            M = cv2.moments(contour_left)
             if M['m00'] != 0:
-                cx = M['m10'] / M['m00']
-                cy = M['m01'] / M['m00']
-                self.positions.append((cx, cy))
-                self.measurements.append(metrics)
-                self.timestamps.append(timestamp or time.time())
+                centroids.append((
+                    M['m10'] / M['m00'],
+                    M['m01'] / M['m00']
+                ))
+
+        # Cenital
+        if contour_top is not None:
+            M = cv2.moments(contour_top)
+            if M['m00'] != 0:
+                centroids.append((
+                    M['m10'] / M['m00'],
+                    M['m01'] / M['m00']
+                ))
+
+        if not centroids:
+            return
+
+        cx = np.mean([c[0] for c in centroids])
+        cy = np.mean([c[1] for c in centroids])
+
+        self.positions.append((cx, cy))
+        self.measurements.append(metrics)
+        self.timestamps.append(timestamp or time.time())
+
     
     def get_smoothed_measurement(self):
         """
@@ -70,33 +96,36 @@ class FishTracker:
         return smoothed
 
     def get_tracking_stats(self):
-        """Calcula la calidad del tracking basándose en la estabilidad"""
-        
+        """Evalúa estabilidad biométrica + espacial."""
+
         count = len(self.measurements)
-        if count == 0:
-            return {'quality': 0, 'is_consistent': False, 'cv': 100.0}
-        
+
         if count < 5:
-            return {
-                'quality': 100,      
-                'is_consistent': True, 
-                'cv': 0.0        
-            }
-        
+            return {'quality': 0, 'is_consistent': False, 'cv': 100.0}
+
         lengths = [m.get('length_cm', 0) for m in self.measurements]
         mean_l = np.mean(lengths)
-        
-        if mean_l == 0: return {'quality': 0, 'is_consistent': False, 'cv': 100.0}
-        
+
+        if mean_l == 0:
+            return {'quality': 0, 'is_consistent': False, 'cv': 100.0}
+
         cv = (np.std(lengths) / mean_l) * 100
-        quality = max(0, 100 - (cv * 10))
-        
+
+        xs = [p[0] for p in self.positions]
+        ys = [p[1] for p in self.positions]
+
+        motion = np.std(xs) + np.std(ys)
+
+        # Penalización combinada
+        quality = 100 - (cv * 5) - (motion * 0.05)
+        quality = max(0, min(100, quality))
+
         return {
-            'quality': min(100, quality),
-            'is_consistent': cv < self.max_cv_threshold,
+            'quality': quality,
+            'is_consistent': cv < self.max_cv_threshold and motion < 15,
             'cv': cv
         }
-    
+
     def clear(self):
         self.positions.clear()
         self.measurements.clear()

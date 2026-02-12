@@ -506,17 +506,23 @@ class ImageViewerDialog(QDialog):
 
     def update_database(self, metrics):
         """Actualiza la BD fusionando los datos existentes con los nuevos de la IA"""
+        # 1. Recopilar datos básicos
         m_id = self.measurement_info.get('id')
+        old_path = self.image_path_combined
+        m_info = self.measurement_info
         
-        full_data_to_save = self.measurement_info.copy()
-        
+        # Recuperar tipo y fecha originales para no perder el rastro
+        tipo_orig = m_info.get('measurement_type', 'AUTO')
+        fecha_orig = m_info.get('timestamp')
+        fish_id = m_info.get('fish_id')
+
+        # 2. Preparar diccionario de datos nuevos
         new_values = {
             'length_cm': metrics['length_cm'], 
             'weight_g': metrics['weight_g'],
             'volume_cm3': metrics['volume_cm3'], 
-            
             'height_cm': metrics['height_cm'],    
-            'width_cm': metrics['width_cm'],         
+            'width_cm': metrics['width_cm'],        
 
             'manual_length_cm': metrics['length_cm'],
             'manual_height_cm': metrics['height_cm'],
@@ -530,21 +536,112 @@ class ImageViewerDialog(QDialog):
             'measurement_type': 'ia_refined'
         }
         
+        # Crear copia de datos actuales y actualizar con los nuevos
+        full_data_to_save = self.measurement_info.copy()
         full_data_to_save.update(new_values)
+
+        new_path = old_path 
+        main_app = self._find_main_window()
         
+        # Variable para guardar la imagen actualizada en memoria
+        imagen_actualizada_para_visor = None
+        if os.path.exists(old_path) and main_app:
+            try:
+                # A. Generar Nuevo Nombre
+                nuevo_nombre = main_app.generar_nombre_archivo(
+                    tipo_orig, fish_id, metrics['length_cm'], metrics['height_cm'],
+                    metrics['width_cm'], metrics['weight_g'], fecha_orig
+                )
+
+                # B. Definir rutas
+                folder = os.path.dirname(old_path)
+                new_path = os.path.join(folder, nuevo_nombre)
+
+                # C. Cargar imagen original segura
+                stream = open(old_path, "rb")
+                bytes = bytearray(stream.read())
+                numpyarray = np.asarray(bytes, dtype=np.uint8)
+                img = cv2.imdecode(numpyarray, cv2.IMREAD_UNCHANGED)
+                stream.close()
+
+                if img is not None:
+                    payload_vis = {
+                        "tipo": "IA-REFINED",
+                        "numero": fish_id,
+                        "longitud": metrics['length_cm'],
+                        "peso": metrics['weight_g'],
+                        "fecha": fecha_orig
+                    }
+                    
+                    # D. DIBUJAR NUEVO OVERLAY
+                    img_upd = main_app.draw_fish_overlay(img, payload_vis)
+                    imagen_actualizada_para_visor = img_upd # Guardamos referencia
+                    
+                    # E. Guardar en disco
+                    is_success, im_buf = cv2.imencode(".jpg", img_upd)
+                    if is_success:
+                        im_buf.tofile(new_path)
+                    
+                        if old_path != new_path and os.path.exists(new_path):
+                            try: os.remove(old_path) 
+                            except: pass
+
+                        full_data_to_save['image_path'] = new_path
+                        self.image_path_combined = new_path
+                    else:
+                        print("Error al codificar la nueva imagen.")
+
+            except Exception as e:
+                print(f"Error actualizando imagen física: {e}")
+
+        # 4. GUARDAR EN BASE DE DATOS
         if self.db_manager.update_measurement(m_id, full_data_to_save):
             
+            # Actualizar info en memoria
             self.measurement_info.update(new_values)
+            self.measurement_info['image_path'] = new_path
             
             if self.on_update_callback: 
                 self.on_update_callback()
                 
             self.setup_info_label() 
+
+            # ---------------------------------------------------------
+            # 5. ACTUALIZACIÓN VISUAL EN PANTALLA (REFRESCO INMEDIATO)
+            # ---------------------------------------------------------
+            if imagen_actualizada_para_visor is not None:
+                # Actualizamos la imagen "original" en la memoria del objeto
+                self.original_image = imagen_actualizada_para_visor
+                
+                if self.is_dual_format:
+                    # Si es formato doble, recortamos de nuevo
+                    h, w, _ = self.original_image.shape
+                    mid = w // 2
+                    self.image_lateral = self.original_image[:, :mid]
+                    self.image_top = self.original_image[:, mid:]
+                    
+                    # Y redibujamos en los labels existentes
+                    self.display_image(self.image_lateral, self.label_lateral)
+                    self.display_image(self.image_top, self.label_top)
+                else:
+                    # Si es formato simple
+                    self.display_image(self.original_image, self.label_full)
+
+            QMessageBox.information(self, "Éxito", "Registro actualizado y visualización refrescada.")
             
-            QMessageBox.information(self, "Éxito", "Registro actualizado correctamente con datos de IA.")
         else:
             QMessageBox.warning(self, "Error", "No se pudo actualizar la base de datos.")
-
+            
+    def _find_main_window(self):
+        """Busca recursivamente hacia arriba hasta encontrar la MainWindow con las funciones necesarias."""
+        # CORRECCIÓN: Usamos self.parent() porque self.main_window no existe aquí
+        curr = self.parent() 
+        while curr:
+            if hasattr(curr, 'draw_fish_overlay') and hasattr(curr, 'generar_nombre_archivo'):
+                return curr
+            curr = curr.parent()
+        return None
+            
     def display_image(self, cv_image, label: QLabel):
         if cv_image is None:
             label.setText("Sin Imagen")

@@ -193,3 +193,5 @@ config.json
 
 # El ejecutable que genera tu script .bat
 *.exe
+
+*.pt

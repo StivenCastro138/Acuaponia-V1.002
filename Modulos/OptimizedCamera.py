@@ -17,7 +17,10 @@ class OptimizedCamera:
     """
     def __init__(self, camera_index):
         self.camera_index = camera_index
-        self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+        self.cap = cv2.VideoCapture(camera_index, cv2.CAP_MSMF)
+
+        if not self.cap.isOpened():
+            self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
         
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, Config.CAMERA_WIDTH) 

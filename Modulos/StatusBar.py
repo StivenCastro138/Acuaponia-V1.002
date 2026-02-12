@@ -11,8 +11,8 @@ import os
 import psutil
 import logging
 from typing import Optional, Final, Dict, Any
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame
-from PySide6.QtCore import Slot, QTimer
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame, QPushButton, QApplication
+from PySide6.QtCore import Slot, QTimer, Qt
 from PySide6.QtGui import QCloseEvent
 
 try:
@@ -35,7 +35,8 @@ class StatusBar(QWidget):
         "gpu": "Uso de núcleos de procesamiento gráfico.", 
         "vram": "Uso de memoria de video.",
         "measurements": "Contador de mediciones validadas.",
-        "cameras": "Estado de conexión de los sensores."
+        "cameras": "Estado de conexión de los sensores.",
+        "api": "Estado de la API Cloud. Haz clic para copiar la URL pública."
     }
 
     UPDATE_INTERVAL_HW: Final[float] = 1.0  
@@ -43,6 +44,7 @@ class StatusBar(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
 
+        self._current_api_url = None
         self._last_hw_update: float = 0.0
         self._process: psutil.Process = psutil.Process(os.getpid())
         self._gpu_handle: Any = None
@@ -78,6 +80,14 @@ class StatusBar(QWidget):
         self.lbl_status = self._create_label("● Iniciando...", self.HELP_TEXTS["status"], "info")
         self.layout_main.addWidget(self.lbl_status)
         self.layout_main.addStretch()
+        
+        self.btn_api = QPushButton("🌐 API: --")
+        self.btn_api.setObjectName("ApiStatusButton")
+        self.btn_api.setToolTip(self.HELP_TEXTS["api"])
+        self.btn_api.setFlat(True)
+        self.btn_api.setCursor(Qt.PointingHandCursor)
+        self.btn_api.setProperty("state", "dim")
+        self.btn_api.clicked.connect(self._on_api_clicked)
 
         # 2. Telemetría
         self.lbl_ia_time = self._create_label("IA: -- ms", self.HELP_TEXTS["ia"], "info")
@@ -99,7 +109,8 @@ class StatusBar(QWidget):
             self.lbl_ia_time, self.lbl_fps, 
             self.lbl_cpu, self.lbl_ram,   
             self.lbl_gpu_load, self.lbl_vram,
-            self.lbl_measurements, self.lbl_cameras
+            self.lbl_measurements, self.lbl_cameras,
+            self.btn_api
         ]
 
         for i, w in enumerate(widgets_telemetry):
@@ -164,7 +175,30 @@ class StatusBar(QWidget):
             self._update_cpu_stats()
             self._update_gpu_stats()
             self._last_hw_update = current_time
+            
+    @Slot(str, str, str)
+    def update_api_status(self, text: str, state: str, url: Optional[str]):
+        """Actualiza el botón de la API desde MainWindow"""
+        self.btn_api.setText(f"🌐 API: {text}")
+        self._current_api_url = url
+        self._update_label_state(self.btn_api, state)
 
+    def _on_api_clicked(self):
+        """Copia la URL al portapapeles y avisa en el status"""
+        # Intentamos obtener la URL que guardamos en el último refresco
+        url_to_copy = getattr(self, "_current_api_url", None)
+        
+        if url_to_copy:
+            # Verificamos si es la de localhost para avisar al usuario
+            if "localhost" in url_to_copy:
+                self.set_status("⚠️ La URL global aún está cargando. Copiada local.", "warning")
+            else:
+                self.set_status("✅ URL Global (Ngrok) copiada con éxito", "success")
+                
+            QApplication.clipboard().setText(url_to_copy)
+        else:
+            self.set_status("❌ API no disponible para copiar", "error")
+            
     def _update_cpu_stats(self) -> None:
         try:
             # CPU 

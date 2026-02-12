@@ -157,6 +157,19 @@ class Config:
 
     # Frames consecutivos requeridos para validar una medición estable
     STABILITY_FRAMES = 5
+    
+    # ==========================================================================
+    #  CONSTANTES DE MEDIOS (cm) ===
+    # ==========================================================================
+    
+    DIST_AIRE = 7.0        
+    ESP_ACRILICO = 0.4     
+    DIST_AGUA_MAX = 15.0   
+    
+    # Índices de refracción
+    N_AIRE = 1.0
+    N_ACRILICO = 1.49
+    N_AGUA = 1.333
 
     # ==========================================================================
     # RUTAS Y DIRECTORIOS
@@ -232,26 +245,41 @@ class Config:
     # ==========================================================================
 
     @staticmethod
-    def calcular_escala_proporcional(valor_y, max_y, escala_frente, escala_fondo):
+    def calcular_escala_proporcional(valor_y, max_y, escala_frente, escala_fondo, es_cenital=False):
         """
-        Calcula una escala proporcional basada en la posición vertical del objeto.
-
-        Se utiliza interpolación lineal para compensar la distorsión por perspectiva.
-
-        Parámetros:
-            valor_y (float): Posición vertical del objeto en píxeles
-            max_y (float): Altura máxima de la imagen
-            escala_frente (float): Escala en la zona cercana a la cámara
-            escala_fondo (float): Escala en la zona lejana
-
-        Retorna:
-            float: Escala interpolada en cm/píxel
+        Calcula la escala cm/px corrigiendo la distorsión de aire-acrílico-agua
+        según la orientación específica de cada cámara.
         """
         if max_y <= 0:
             return escala_frente
 
         proporcion = valor_y / max_y
-        return escala_frente + (escala_fondo - escala_frente) * proporcion
+        
+        if es_cenital:
+            # Cámara Cenital: Arriba (0) es LEJOS, Abajo (max) es CERCA
+            p_escala = 1.0 - proporcion 
+            p_agua = 1.0 - proporcion    
+        else:
+            # Cámara Lateral: Arriba (0) es CERCA, Abajo (max) es LEJOS
+            p_escala = proporcion     
+            p_agua = proporcion          
+
+        # 1. Escala base interpolada (calibración en aire)
+        escala_aire = escala_frente + (escala_fondo - escala_frente) * p_escala
+
+        # 2. CÁLCULO DE REFRACCIÓN (Ley de Snell simplificada)
+        dist_agua_actual = Config.DIST_AGUA_MAX * p_agua
+        dist_real = Config.DIST_AIRE + Config.ESP_ACRILICO + dist_agua_actual
+        
+        dist_aparente = (
+            (Config.DIST_AIRE / Config.N_AIRE) +
+            (Config.ESP_ACRILICO / Config.N_ACRILICO) +
+            (dist_agua_actual / Config.N_AGUA)
+        )
+
+        factor_correccion = dist_aparente / dist_real
+        
+        return escala_aire * factor_correccion
 
 
 # Inicialización automática de la configuración

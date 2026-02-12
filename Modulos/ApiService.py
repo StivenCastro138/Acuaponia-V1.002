@@ -15,8 +15,7 @@ from datetime import datetime
 from functools import wraps
 from flask import Flask, jsonify, request
 from flask_cors import CORS  
-from pyngrok import ngrok, conf
-from collections import OrderedDict
+from pyngrok import ngrok
 
 from Config.Config import Config
 
@@ -29,24 +28,31 @@ logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 class ApiService:
     def __init__(self, port=5000):
-        self.ngrok_token = Config.NGROK_AUTHTOKEN
+        self.ngrok_token = Config.NGROK_AUTHTOKEN.strip() if Config.NGROK_AUTHTOKEN else None
         self.port = port
         self.app = Flask(__name__)
         self.server_thread = None
         self.public_url = None
         self.running = False
         self._cache = {}
-        self._cache_timeout = 60  # segundos
-        
-        # Configuración de seguridad y CORS
+        self._cache_timeout = 60  
+
+        # Configuración CORS
         CORS(self.app, resources={r"/api/*": {"origins": "*"}})
         self.app.config['JSON_SORT_KEYS'] = False
-        
-        # Configurar ngrok una sola vez
+
+        # Configurar token de ngrok correctamente
         if self.ngrok_token:
-            conf.get_default().auth_token = self.ngrok_token
-            
+            try:
+                ngrok.set_auth_token(self.ngrok_token)
+                logger.info("Ngrok authtoken configurado")
+            except Exception as e:
+                logger.error(f"Error configurando authtoken de ngrok: {e}")
+        else:
+            logger.warning("NGROK_AUTHTOKEN no definido en Config")
+
         self._setup_routes()
+
 
     def _setup_routes(self):
         """Configura todos los endpoints de la API."""
@@ -292,40 +298,45 @@ class ApiService:
         if self.running:
             logger.warning("El servicio ya está en ejecución")
             return
-            
+
         self.running = True
-        
+
         # Iniciar Flask en thread separado
         self.server_thread = threading.Thread(
-            target=self._run_server, 
+            target=self._run_server,
             daemon=True,
             name="FlaskThread"
         )
         self.server_thread.start()
-        
+
         # Esperar a que Flask inicie
         time.sleep(2)
-        
+
         # Configurar túnel Ngrok
         try:
-            ngrok.kill()  # Limpiar procesos previos
-            self.public_url = ngrok.connect(self.port, bind_tls=True).public_url
-            
-            print("\n" + "🔓" + "═"*70)
-            print(f" 🚀 FISHTRACE API v2.0 - SERVICIO ACTIVO")
-            print(f" 🌐 URL PÚBLICA: {self.public_url}")
-            print(f"\n 📡 ENDPOINTS DISPONIBLES:")
-            print(f"    • Health Check:     {self.public_url}/api/health")
-            print(f"    • Último Reporte:   {self.public_url}/api/last_report")
-            print(f"    • Estadísticas:     {self.public_url}/api/stats")
-            print(" " + "═"*70 + "\n")
-            
+            # Cerrar túneles previos
+            ngrok.kill()
+
+            # Configurar token correctamente
+            if self.ngrok_token:
+                ngrok.set_auth_token(self.ngrok_token)
+                logger.info("Authtoken de ngrok configurado correctamente")
+            else:
+                logger.warning("NGROK_AUTHTOKEN no definido en Config")
+                raise ValueError("Token de ngrok no configurado")
+
+            # Crear túnel HTTP
+            tunnel = ngrok.connect(
+                addr=self.port,
+                proto="http"
+            )
+
+            self.public_url = tunnel.public_url
             logger.info(f"API pública disponible en: {self.public_url}")
-            
+
         except Exception as e:
             logger.error(f"Error al configurar Ngrok: {e}")
-            print(f"⚠️ Advertencia: No se pudo crear túnel público - {e}")
-            print(f"   El servicio sigue disponible localmente en http://localhost:{self.port}")
+            self.public_url = None
 
     def _run_server(self):
         """Ejecuta el servidor Flask."""
@@ -340,7 +351,19 @@ class ApiService:
         except Exception as e:
             logger.error(f"Error en servidor Flask: {e}")
             self.running = False
-
+            
+    def get_status_info(self):
+        # Prioridad absoluta a la URL pública de Ngrok
+        if self.running and self.public_url:
+            return "Online", "success", self.public_url
+        
+        # Si el servidor Flask corre pero Ngrok falló o está cargando
+        elif self.running:
+            return "Local", "warning", f"http://localhost:{self.port}"
+        
+        # Si nada está encendido
+        return "Offline", "error", None
+    
     def stop(self):
         """Detiene el servicio de forma ordenada."""
         if self.running:

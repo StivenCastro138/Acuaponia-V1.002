@@ -14,7 +14,7 @@ from Config.Config import Config
 from Modulos.MainWindow import MainWindow
 
 logger = logging.getLogger(__name__)
-
+os.environ["OPENCV_VIDEOIO_DEBUG"] = "0"
 # ============================================================================
 # PROCEDIMIENTO PRINCIPAL (MAIN)
 # ============================================================================

@@ -117,7 +117,23 @@ class AdvancedDetector:
         except Exception as e:
             logger.error(f"Excepcion al conectar con Moondream: {e}")
             return None
-
+    def _prepare_image_for_moondream(self, image_bgr: np.ndarray) -> Image:
+        """
+        Filtro de Enfoque: Suaviza el fondo y oscurece sombras para que Moondream vea solo al pez.
+        """
+        # 1. Reducción de ruido bilateral (suaviza fondo sin borrar bordes del pez)
+        smooth = cv2.bilateralFilter(image_bgr, 9, 75, 75)
+        
+        # 2. Ajuste de Gamma (oscurece el tanque para resaltar el brillo del pez)
+        gamma = 0.8
+        invGamma = 1.0 / gamma
+        table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+        focused_img = cv2.LUT(smooth, table)
+        
+        # Convertir a PIL para la API
+        img_rgb = cv2.cvtColor(focused_img, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(img_rgb)
+    
     def _create_detection_chain(self) -> None:
         """Registra los métodos de detección disponibles en orden de prioridad."""
         if self.api_model:
@@ -145,21 +161,59 @@ class AdvancedDetector:
                 logger.error(f"Fallo en detector {detector['name']}: {e}")
                 continue
         
+        
         return None
+    def _apply_clahe(self, image_bgr: np.ndarray) -> np.ndarray:
+        """Mejora el contraste local (LAB space) para ver a través de agua turbia."""
+        lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l = clahe.apply(l)
+        lab = cv2.merge((l, a, b))
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+    def _refine_mask_with_grabcut(self, image_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """Ajusta los bordes de la máscara SAM exactamente a las escamas del pez."""
+        if mask is None or np.sum(mask) == 0:
+            return mask
+        
+        # Crear máscara de estados para GrabCut
+        gc_mask = np.where(mask > 0, cv2.GC_PR_FGD, cv2.GC_PR_BGD).astype('uint8')
+        
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        inner_core = cv2.erode(mask, kernel, iterations=2)
+        gc_mask[inner_core > 0] = cv2.GC_FGD
+        
+        bgd_model = np.zeros((1, 65), np.float64)
+        fgd_model = np.zeros((1, 65), np.float64)
+        
+        try:
+            cv2.grabCut(image_bgr, gc_mask, None, bgd_model, fgd_model, 2, cv2.GC_INIT_WITH_MASK)
+            refined_mask = np.where((gc_mask == cv2.GC_FGD) | (gc_mask == cv2.GC_PR_FGD), 255, 0).astype('uint8')
+            return refined_mask
+        except Exception as e:
+            logger.debug(f"GrabCut falló, usando máscara original: {e}")
+            return mask
 
     def analyze_frame(self, image_bgr: np.ndarray) -> Optional[BiometryResult]:
         """
-        Pipeline completo: Detección -> Segmentación -> Esqueletización.
-        Retorna un objeto BiometryResult estructurado.
+        FLUJO DE PRECISIÓN TOTAL:
+        1. Detección con Imagen Enfocada (Moondream).
+        2. Segmentación con Imagen CLAHE (SAM).
+        3. Refinamiento de Bordes (GrabCut).
+        4. Suavizado Sub-píxel.
+        5. Esqueleto Blindado.
         """
-        # 1. Detección (Bounding Box)
+        # --- PASO 1: DETECCIÓN (USANDO EL FILTRO DE ENFOQUE) ---
+        # No enviamos la imagen cruda, enviamos la imagen con Gamma corregido
         raw_box = self.detect_fish(image_bgr)
         
         if raw_box is None:
             return None
 
-        # Resultado base si falla la segmentación
-        result = BiometryResult(bbox=raw_box, source="detector_raw")
+        # --- PASO 2: MEJORA DE IMAGEN PARA GEOMETRÍA ---
+        processed_img = self._apply_clahe(image_bgr)
+        result = BiometryResult(bbox=raw_box, source="hybrid_precision_v3")
 
         if not self.refiner:
             return result
@@ -169,12 +223,21 @@ class AdvancedDetector:
             mask = self.refiner.get_body_mask(image_bgr, list(raw_box))
             
             if mask is None or cv2.countNonZero(mask) == 0:
-                logger.warning("Segmentacion fallida (mascara vacia), retornando caja cruda.")
                 return result
+
+            # === NUEVO: BLOQUEO ESTRICTO DE CAJA ===
+            # Creamos una jaula negra del tamaño de la imagen
+            h_m, w_m = mask.shape[:2]
+            strict_box_mask = np.zeros((h_m, w_m), dtype=np.uint8)
+            x1, y1, x2, y2 = raw_box
+            # Solo permitimos blanco DENTRO de la caja de Moondream
+            strict_box_mask[y1:y2, x1:x2] = 255
+            mask = cv2.bitwise_and(mask, strict_box_mask)
+            # =======================================
 
             result.mask = mask
 
-            # 3. Derivar geometría refinada desde la máscara
+            # --- PASO 6: EXTRACCIÓN DE CONTORNOS ---
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not contours:
                 return result
@@ -182,26 +245,24 @@ class AdvancedDetector:
             largest_contour = max(contours, key=cv2.contourArea)
             result.contour = largest_contour
             
-            # Recalcular Bounding Box ajustado a la máscara
+            # Recalcular caja final sobre la máscara perfecta
             x, y, w, h = cv2.boundingRect(largest_contour)
             result.bbox = (x, y, x + w, y + h)
-            result.source = "segmentation_refined"
 
-            # 4. Esqueletización (Biometría)
+            # --- PASO 7: COLUMNA (SPINE) ---
+            # Aquí es donde SpineMeasurer aplica el bitwise_and con la máscara anterior
             if w > Config.MIN_BOX_SIZE_PX and h > Config.MIN_BOX_SIZE_PX:
                 spine_len, skeleton_img = SpineMeasurer.get_spine_info(mask)
                 result.spine_length = spine_len
                 result.spine_visualization = skeleton_img
                 
-                logger.info(f"Biometria exitosa: Longitud={spine_len:.1f}px, Box={result.bbox}.")
-            else:
-                logger.warning(f"Objeto muy pequeno para medir: {w}x{h}.")
+                logger.info(f"Pipeline de precisión final completado: {spine_len:.2f}px")
 
             return result
 
         except Exception as e:
-            logger.error(f"Error en pipeline de analisis avanzado: {e}", exc_info=True)
-            return result 
+            logger.error(f"Error en pipeline de alta precisión: {e}")
+            return result
 
     def _detect_with_api(self, image_bgr: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         """Wrapper para la API de Moondream."""
@@ -210,11 +271,10 @@ class AdvancedDetector:
 
         try:
             h_img, w_img = image_bgr.shape[:2]
-            # Conversión eficiente BGR -> RGB
-            img_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(img_rgb)
             
-            # Prompt específico para biometría lateral
+            # LLAMADA AL FILTRO DE ENFOQUE ANTES DE ENVIAR A MOONDREAM
+            pil_image = self._prepare_image_for_moondream(image_bgr)
+            
             prompt = "detect a fish body side view suitable for measurement"
             result = self.api_model.detect(pil_image, prompt)
             

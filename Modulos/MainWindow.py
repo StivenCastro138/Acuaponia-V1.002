@@ -33,7 +33,7 @@ from PySide6.QtCore import (
     QPropertyAnimation, QEasingCurve, QAbstractAnimation
 )
 from PySide6.QtGui import (
-    QImage, QPixmap, QColor, QFont, QIcon, QIntValidator
+    QImage, QPixmap, QColor, QFont, QIcon, QIntValidator, QAction
 )
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView,
     QScrollArea, QListWidget, QListWidgetItem,
     QSizePolicy, QDateEdit, QTimeEdit,
-    QAbstractItemView, QStyle, QGraphicsOpacityEffect
+    QAbstractItemView, QStyle, QGraphicsOpacityEffect, QMenu
 )
 import sqlite3
 from reportlab.lib.pagesizes import A4
@@ -133,6 +133,7 @@ class MainWindow(QMainWindow):
         self.current_frame_top = None
         self.auto_capture_enabled = False
         self.last_result = None
+        self.cameras_connected = False
         self.scale_front_left = Config.SCALE_LAT_FRONT
         self.scale_back_left = Config.SCALE_LAT_BACK
         self.scale_front_top = Config.SCALE_TOP_FRONT
@@ -168,7 +169,7 @@ class MainWindow(QMainWindow):
             count = self.db.get_today_measurements_count()
             self.status_bar.set_measurement_count(count)
         except Exception as e:
-            logger.warning(f"Error al cargar contador inicial: {e}.")
+            logger.error(f"Error al cargar contador inicial: {e}.")
             
         self.cache_params = {
             'min_area': 5000,
@@ -217,7 +218,8 @@ class MainWindow(QMainWindow):
             self.api_service = ApiService(port=5000)
             self.api_service.start()
         except Exception as e:
-            logger(f"Error API: {e}")
+            logger.error(f"Error API: {e}")
+        self.ram_timer.timeout.connect(self.update_api_status_ui)
         
     def init_ui(self):
         central_widget = QWidget()
@@ -263,7 +265,48 @@ class MainWindow(QMainWindow):
         self.tabs.tabBar().setTabToolTip(4, "Parámetros y configuración del sistema")
 
         self.tabs.tabBar().setCursor(Qt.PointingHandCursor)
+        
+    def update_api_status_ui(self):
+        """Sincroniza el estado del servicio API con el botón de la StatusBar"""
+        if hasattr(self, 'api_service'):
+            text, state, url = self.api_service.get_status_info()
             
+            self.status_bar.update_api_status(text, state, url)
+            
+    def draw_fish_overlay(self, image, data):
+        """
+        Motor de anotación.
+        """
+        if image is None: return None
+        img = image.copy()
+        h, w = img.shape[:2]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        
+        sc = w / 2200 
+        
+        p_w, p_h = int(220 * sc), int(100 * sc)
+        cv2.rectangle(img, (0, 0), (p_w, p_h), (15, 15, 15), -1) 
+        cv2.rectangle(img, (0, 0), (p_w, p_h), (0, 255, 255), 1) 
+
+        curr_y = int(20 * sc) 
+        
+        cv2.putText(img, f"{data['tipo']}: {data['numero']}", (int(8*sc), curr_y), 
+                    font, 0.5*sc, (0, 255, 255), 1, cv2.LINE_AA)
+        
+        curr_y += int(22 * sc)
+        cv2.putText(img, f"L: {data['longitud']:.2f}cm", (int(8*sc), curr_y), 
+                    font, 0.45*sc, (0, 255, 0), 1, cv2.LINE_AA)
+        
+        curr_y += int(20 * sc)
+        cv2.putText(img, f"W: {data['peso']:.1f}g", (int(8*sc), curr_y), 
+                    font, 0.45*sc, (0, 255, 0), 1, cv2.LINE_AA)
+
+        curr_y += int(18 * sc)
+        cv2.putText(img, data['fecha'], (int(8*sc), curr_y), 
+                    font, 0.38*sc, (180, 180, 180), 1, cv2.LINE_AA)
+
+        return img
+
     def on_processing_complete(self, result):
         """
         Coordina: Desbloqueo, Validación, UI, Auto-captura
@@ -307,8 +350,16 @@ class MainWindow(QMainWindow):
         self.last_result = result
         self.last_metrics = metrics
 
-        if hasattr(self, 'tracker') and 'contour_left' in result:
-            self.tracker.update(result['contour_left'], metrics)
+        contour_left = result.get('contour_left')
+        contour_top  = result.get('contour_top')
+
+        if hasattr(self, 'tracker'):
+            self.tracker.update(
+                contour_left,
+                contour_top,
+                metrics,
+                time.time()
+            )
 
         confidence = float(result.get('confidence', 0.0))
         
@@ -319,10 +370,15 @@ class MainWindow(QMainWindow):
         warnings = []
         
         # Advertencias de detección
+
+        if contour_left is None and contour_top is None:
+            warnings.append("⚠️ No se detectaron contornos válidos")
+        elif contour_left is None:
+            warnings.append("⚠️ Falta contorno lateral")
+        elif contour_top is None:
+            warnings.append("⚠️ Falta contorno cenital")
         if not val_anatomica.get('is_fish', True):
             warnings.append("⚠️ Forma anatómica inusual detectada")
-        if result.get('contour_left') is None:
-            warnings.append("⚠️ Falta contorno lateral")
         if confidence < Config.CONFIDENCE_THRESHOLD:
             warnings.append(f"⚠️ Confianza baja ({confidence:.0%})")
         
@@ -363,8 +419,18 @@ class MainWindow(QMainWindow):
             self._auto_fill_manual_form(metrics, confidence)
 
         self._update_results_report(metrics, confidence, warnings, result)
+        fish_detected = (
+            contour_left is not None
+            and contour_top is not None
+            and confidence >= Config.CONFIDENCE_THRESHOLD
+        )
 
-        self._handle_stability_and_autocapture(result, confidence, warnings)
+        self._handle_stability_and_autocapture(
+            result,
+            confidence,
+            warnings,
+            fish_detected
+        )
 
     def _animate_confidence(self, current_value, target_value):
         """
@@ -636,37 +702,54 @@ class MainWindow(QMainWindow):
             self.btn_save.style().unpolish(self.btn_save)
             self.btn_save.style().polish(self.btn_save)
 
-    def _handle_stability_and_autocapture(self, result, confidence, warnings):
-        """Manejo optimizado de estabilidad y captura"""
+    def _handle_stability_and_autocapture(self, result, confidence, warnings, fish_detected):
+        """Manejo de estabilidad, detección y captura"""
+
+        if not fish_detected:
+            self.lbl_stability.setText("🔍 NO SE DETECTA PEZ")
+            self.lbl_stability.setProperty("state", "neutral")
+
+            self.lbl_stability.style().unpolish(self.lbl_stability)
+            self.lbl_stability.style().polish(self.lbl_stability)
+
+            return
+
         is_stable = result.get('is_stable', False)
         motion_level = result.get('motion_level', 0)
-        
-        # Lógica visual simplificada
+
         if is_stable:
             self.lbl_stability.setText("✅ PEZ ESTABLE")
-            self.lbl_stability.setProperty("state", "ok") 
+            self.lbl_stability.setProperty("state", "ok")
         else:
             self.lbl_stability.setText(f"⚠️ EN MOVIMIENTO ({motion_level:.0f}%)")
             self.lbl_stability.setProperty("state", "warn")
-        
+
         self.lbl_stability.style().unpolish(self.lbl_stability)
         self.lbl_stability.style().polish(self.lbl_stability)
-            
-        if (self.auto_capture_enabled and is_stable and confidence >= Config.CONFIDENCE_THRESHOLD 
-            and not self.processing_lock and len(warnings) == 0):
-            
+
+        if (
+            self.auto_capture_enabled
+            and is_stable
+            and confidence >= Config.CONFIDENCE_THRESHOLD
+            and not self.processing_lock
+            and len(warnings) == 0
+        ):
+
             self.processing_lock = True
             self.status_bar.set_status("💾 Guardando medición automática...", "success")
-            
+
             try:
                 QTimer.singleShot(17000, self._save_measurement_silent)
                 QTimer.singleShot(17050, self.save_sound.play)
                 QTimer.singleShot(22000, self.unlock_after_save)
-          
+
             except Exception as e:
-                logger.error(f"Error en auto-guardado: {e}.")
+                logger.error(f"Error en auto-guardado: {e}")
                 self.processing_lock = False
-                self.status_bar.set_status(f"❌ Error al guardar: {str(e)}.", "error")
+                self.status_bar.set_status(
+                    f"❌ Error al guardar: {str(e)}",
+                    "error"
+                )
 
     def unlock_after_save(self):
         """
@@ -991,7 +1074,6 @@ class MainWindow(QMainWindow):
         self.lbl_manual_left.setProperty("class", "video-lateral")
         self.lbl_manual_left.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_manual_left.setToolTip("Cámara encargada de medir Longitud y Altura del lomo del pez.")
-        self.lbl_manual_left.pause_callback = self.toggle_camera_pause
         preview_layout.addWidget(self.lbl_manual_left)
 
         self.lbl_manual_top.setText("Cámara Cenital")
@@ -999,7 +1081,6 @@ class MainWindow(QMainWindow):
         self.lbl_manual_top.setProperty("class", "video-cenital")
         self.lbl_manual_top.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_manual_top.setToolTip("Cámara encargada de medir el Ancho dorsal del pez.")
-        self.lbl_manual_top.pause_callback = self.toggle_camera_pause
         preview_layout.addWidget(self.lbl_manual_top)
 
         layout.addWidget(preview_group)
@@ -1439,10 +1520,16 @@ class MainWindow(QMainWindow):
             )
             filepath = os.path.join(Config.IMAGES_MANUAL_DIR, filename_save)
             
-            # Anotar imagen
-            img_ann = image.copy()
-            cv2.putText(img_ann, f"ID: {fish_id} (EXTERNA)", (20, 40), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            info_ext = {
+                "tipo": "EXTERNA",
+                "numero": "S/N",
+                "longitud": 0.0,
+                "peso": 0.0,
+                "fecha": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+            img_ann = self.draw_fish_overlay(image, info_ext)
+            
             cv2.imwrite(filepath, img_ann)
             
             data = {
@@ -1999,6 +2086,57 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
             self.btn_manual_ai_assist.setEnabled(True)
             self.btn_manual_ai_assist.setText("🤖 Asistente IA")
+            
+    def generar_nombre_archivo(self, tipo, fish_id, L, H, W, P, fecha_str):
+        """
+        Genera el nombre del archivo respetando el formato original (Manual, Auto, Externo).
+        fecha_str: Debe venir en formato 'YYYY-MM-DD HH:MM:SS'
+        """
+        # 1. Convertir fecha de '2026-01-22 10:30:00' a '20260122_103000'
+        # Usamos regex o replace simple para limpiar
+        ts_clean = fecha_str.replace("-", "").replace(":", "").replace(" ", "_")
+        
+        # 2. SELECCIÓN DE FORMATO SEGÚN EL TIPO
+        tipo = str(tipo).upper()
+        
+        if "MANUAL" in tipo:
+            # FORMATO MANUAL: MANUAL_ID_FECHA_L..._H..._W..._P...
+            nombre = (
+                f"MANUAL_"
+                f"{fish_id}_"
+                f"{ts_clean}_"
+                f"L{L:.1f}cm_"
+                f"H{H:.1f}cm_"
+                f"W{W:.1f}cm_"
+                f"P{P:.1f}g.jpg"
+            )
+            
+        elif "EXTERNA" in tipo or "EXTERNO" in tipo:
+            # FORMATO EXTERNO: EXTERNOID_FECHA_... (Según tu snippet)
+            # Nota: Tu snippet original tenía "EXTERNO" pegado al ID o con un formato fijo.
+            # Vamos a estandarizarlo para que incluya los datos actualizados:
+            nombre = (
+                f"EXTERNO_"
+                f"{fish_id}_"
+                f"{ts_clean}_"
+                f"L{L:.1f}cm_"
+                f"H{H:.1f}cm_"
+                f"W{W:.1f}cm_"
+                f"P{P:.1f}g.jpg"
+            )
+            
+        else:
+            # FORMATO AUTOMÁTICO (El default de tu snippet)
+            # ID_L..._P..._FECHA.jpg (Nota: Auto suele tener menos datos en el nombre)
+            nombre = (
+                f"AUTO_"
+                f"{fish_id}_"
+                f"L{L:.1f}_"
+                f"P{P:.1f}_"
+                f"{ts_clean}.jpg"
+            )
+            
+        return nombre
 
     def save_measurement(self):
         """
@@ -2092,41 +2230,17 @@ class MainWindow(QMainWindow):
                 cv2.resize(frame_top, (Config.SAVE_WIDTH, Config.SAVE_HEIGHT))
             ))
             
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            y_pos = 30
-            
             # Encabezado
-            cv2.putText(combined, f"AUTO: Pez #{fish_id}", (10, y_pos), 
-                        font, 0.9, (0, 255, 255), 2)
-            
-            # Dimensiones principales
-            y_pos += 40
-            dimensions_text = f"L: {length_cm:.2f}cm"
-            if height_cm > 0:
-                dimensions_text += f" | H: {height_cm:.2f}cm"
-            if width_cm > 0:
-                dimensions_text += f" | W: {width_cm:.2f}cm"
-            
-            cv2.putText(combined, dimensions_text, (10, y_pos), 
-                        font, 0.7, (0, 255, 0), 2)
-            
-            # Peso
-            y_pos += 35
-            cv2.putText(combined, f"Peso: {weight_g:.1f}g", (10, y_pos), 
-                        font, 0.7, (0, 255, 0), 2)
-            
-            # Confianza
-            y_pos += 35
-            cv2.putText(combined, f"Confianza: {confidence:.0%}", (10, y_pos), 
-                        font, 0.7, (0, 255, 0), 2)
-            
-            # Timestamp
-            y_pos += 35
-            cv2.putText(combined, timestamp.strftime('%Y-%m-%d %H:%M:%S'), (10, y_pos), 
-                        font, 0.6, (180, 180, 180), 2)
-            
-            # Guardar imagen
-            cv2.imwrite(filepath, combined)
+            info_auto = {
+                "tipo": "SEMI-AUTO",
+                "numero": fish_id,
+                "longitud": length_cm,
+                "peso": weight_g,
+                "fecha": timestamp.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            # Generamos la imagen con el panel estandarizado
+            combined_final = self.draw_fish_overlay(combined, info_auto)
+            cv2.imwrite(filepath, combined_final)
             
             api_data = SensorService.get_water_quality_data()
             data = {
@@ -2283,57 +2397,15 @@ class MainWindow(QMainWindow):
             color_gray = (150, 150, 150)
 
             # 1. Título con fondo
-            cv2.rectangle(combined, (0, 0), (combined.shape[1], 50), (40, 40, 40), -1)
-            cv2.putText(combined, f"MEDICION MANUAL: {fish_id}", (10, 35), font, 1.2, color_cyan, 3)
-            
-            # 2. Dimensiones
-            y_offset = 80
-            cv2.putText(combined, 
-                        f"L: {length_cm:.1f} cm | H: {height_cm:.1f} cm | W: {width_cm:.1f} cm",
-                        (10, y_offset), font, 0.9, color_green, 2)
-            
-            y_offset += 40
-            cv2.putText(combined, f"Peso: {weight_g:.1f} g", 
-                        (10, y_offset), font, 0.9, color_green, 2)
-            
-            # 3. Factor K con Lógica de Colores
-            if length_cm > 0 and weight_g > 0:
-                k_factor = 100 * weight_g / (length_cm ** 3)
-                y_offset += 40
-                
-                # Semáforo de colores
-                if 0.8 <= k_factor <= 1.8:
-                    k_color = (0, 255, 0)  
-                    k_status = "OPTIMO"
-                elif 0.5 <= k_factor <= 2.5:
-                    k_color = (0, 165, 255)  
-                    k_status = "ACEPTABLE"
-                else:
-                    k_color = (0, 0, 255)  
-                    k_status = "ANORMAL"
-                
-                cv2.putText(combined, f"Factor K: {k_factor:.3f} ({k_status})",
-                            (10, y_offset), font, 0.8, k_color, 2)
-            
-            # 4. Timestamp
-            y_offset += 40
-            cv2.putText(combined, timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-                        (10, y_offset), font, 0.7, color_gray, 2)
-            
-            # 5. Notas (Truncadas)
-            if notes:
-                y_offset += 35
-                display_notes = notes[:80] + "..." if len(notes) > 80 else notes
-                cv2.putText(combined, f"Notas: {display_notes}",
-                            (10, y_offset), font, 0.6, color_gray, 1)
-            
-            # 6. Etiquetas de Vistas (Abajo)
-            cv2.putText(combined, "Vista Lateral", (20, combined.shape[0] - 20), font, 0.8, color_gray, 2)
-            cv2.putText(combined, "Vista Cenital", (Config.SAVE_WIDTH + 20, combined.shape[0] - 20), font, 0.8, color_gray, 2)
-            
-            # Guardar
-            if not cv2.imwrite(filepath, combined):
-                raise IOError("Fallo cv2.imwrite")
+            info_manual = {
+                "tipo": "MANUAL",
+                "numero": fish_id,
+                "longitud": length_cm,
+                "peso": weight_g,
+                "fecha": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            imagen_manual = self.draw_fish_overlay(combined, info_manual)
+            cv2.imwrite(filepath, imagen_manual)
                 
         except Exception as e:
             QMessageBox.critical(self, "Error Guardando Imagen", f"{e}")
@@ -2456,17 +2528,17 @@ class MainWindow(QMainWindow):
             ))
             
             # --- 4. DIBUJAR TEXTOS EN LA IMAGEN ---
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            cv2.putText(combined, f"AUTO-CAPTURA", (10, 30), font, 0.9, (0, 255, 255), 2)
-            cv2.putText(combined, f"Longitud: {length_cm:.2f} cm", (10, 65), font, 0.8, (0, 255, 0), 2)
-            cv2.putText(combined, f"Altura: {height_cm:.2f} cm", (10, 100), font, 0.8, (0, 255, 0), 2) 
-            cv2.putText(combined, f"Ancho: {width_cm:.2f} cm", (10, 135), font, 0.8, (0, 255, 0), 2)
-            cv2.putText(combined, f"Peso: {weight_g:.1f} g", (10, 170), font, 0.8, (0, 255, 0), 2)
-            cv2.putText(combined, f"K: {factor_k:.2f} | Conf: {confidence:.0%}", (10, 205), font, 0.8, (0, 255, 0), 2)
-            cv2.putText(combined, timestamp.strftime('%Y-%m-%d %H:%M:%S'), (10, 240), font, 0.7, (180, 180, 180), 2)
-            
-            # Guardar en disco
-            cv2.imwrite(filepath, combined)
+            # Dentro de on_processing_complete, cuando guardas la captura
+            info_auto = {
+                "tipo": "AUTO",
+                "numero": fish_id,
+                "longitud": length_cm,
+                "peso": weight_g,
+                "fecha": timestamp.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            # Generamos la imagen con el panel estandarizado
+            combined_final = self.draw_fish_overlay(combined, info_auto)
+            cv2.imwrite(filepath, combined_final)
 
             try:
                 api_data = SensorService.get_water_quality_data()
@@ -2684,15 +2756,36 @@ class MainWindow(QMainWindow):
         filter_layout.addLayout(btn_container, 1, 4)
 
         layout.addWidget(filter_group)
+        
+        self.fixed_columns = [
+            "ID", "Fecha/Hora", "Tipo", "Pez ID", "Largo (cm)",
+            "Alto (cm)", "Ancho (cm)", "Peso (g)",
+            "Factor K", "Confianza", "Notas"
+        ]
+
+        self.optional_columns = [
+            "Temp Aire (°C)",
+            "Temp Agua (°C)",
+            "Humedad Rel (%)",
+            "Humedad Abs (g/m3)",
+            "pH",
+            "Conductividad (µS/cm)",
+            "Oxígeno Disuelto (mg/L)",
+            "Turbidez (NTU)"
+        ]
+
+        all_columns = self.fixed_columns + self.optional_columns
 
         self.table_history = QTableWidget()
-        self.table_history.setColumnCount(11)
-        self.table_history.setHorizontalHeaderLabels([
-            "ID", "Fecha/Hora", "Tipo", "Pez ID", "Largo (cm)", 
-            "Alto (cm)", "Ancho (cm)", "Peso (g)", "Factor K", "Confianza", "Notas"
-        ])
-        
+        self.table_history.setColumnCount(len(all_columns))
+        self.table_history.setHorizontalHeaderLabels(all_columns)
+
+        # Ocultar columnas opcionales al inicio
+        for col in range(len(self.fixed_columns), len(all_columns)):
+            self.table_history.setColumnHidden(col, True)
+            
         # Ajustes de Tabla
+        self.table_history.horizontalHeader().setSectionsMovable(False)
         self.table_history.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive) 
         self.table_history.horizontalHeader().setStretchLastSection(True)
         self.table_history.setAlternatingRowColors(True)
@@ -2701,9 +2794,20 @@ class MainWindow(QMainWindow):
         self.table_history.verticalHeader().setVisible(False)
         self.table_history.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
-        self.table_history.setToolTip("💡 <b>Tip:</b> Haz <b>doble clic</b> en una fila para ver la foto de la medición.")
+        self.table_history.setToolTip(
+            "💡 <b>Acciones rápidas:</b><br><br>"
+            "🖱️ <b>Doble clic</b>: Ver imagen de la medición.<br>"
+            "🖱️ <b>Clic derecho</b>: Editar registro seleccionado."
+        )
         
         self.table_history.cellDoubleClicked.connect(self.view_measurement_image)
+        self.table_history.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table_history.customContextMenuRequested.connect(self.edit_from_right_click)
+        
+        header = self.table_history.horizontalHeader()
+        header.setContextMenuPolicy(Qt.CustomContextMenu)
+        header.customContextMenuRequested.connect(self.show_column_menu)
+
         layout.addWidget(self.table_history)
 
         pagination_layout = QHBoxLayout()
@@ -2763,6 +2867,35 @@ class MainWindow(QMainWindow):
         self.refresh_history()
         
         return widget
+    
+    def show_column_menu(self, position):
+        menu = QMenu(self)
+
+        for i, name in enumerate(self.optional_columns):
+            col_index = len(self.fixed_columns) + i
+
+            action = QAction(name, self)
+            action.setCheckable(True)
+            action.setChecked(not self.table_history.isColumnHidden(col_index))
+
+            action.triggered.connect(
+                lambda checked, c=col_index:
+                    self.table_history.setColumnHidden(c, not checked)
+            )
+
+            menu.addAction(action)
+
+        header = self.table_history.horizontalHeader()
+        menu.exec(header.mapToGlobal(position))
+
+
+    def edit_from_right_click(self, position):
+        item = self.table_history.itemAt(position)
+
+        if item is not None:
+            self.table_history.selectRow(item.row())
+
+            self.edit_selected_measurement()
 
     def clear_filters(self):
         """Resetea los filtros y limpia la búsqueda visualmente"""
@@ -3784,7 +3917,7 @@ class MainWindow(QMainWindow):
                 color: {c_error_base};
                 font-weight: bold;
             }}
-
+            
             /* --- BADGES DE TIPO --- */
             QLabel[tipo="auto"] .badge {{ font-weight: bold; }}
             QLabel[tipo="manual"] .badge {{ font-style: italic; }}
@@ -4293,96 +4426,207 @@ class MainWindow(QMainWindow):
             w.style().unpolish(w)
             w.style().polish(w)
 
-    def create_no_camera_image(self):
-        """Genera un placeholder elegante cuando la cámara falla"""
-        img = np.zeros((480, 640, 3), dtype=np.uint8)
-        img[:] = (35, 35, 35) 
+    def create_no_camera_image(self, width, height):
+        """Genera un placeholder adaptable al tamaño del widget"""
         
+        # Imagen del tamaño real
+        img = np.zeros((height, width, 3), dtype=np.uint8)
+        img[:] = (35, 35, 35)
+
+        # Texto principal
         font = cv2.FONT_HERSHEY_SIMPLEX
-        cv2.putText(img, "CAMARA NO DISPONIBLE", (140, 220), font, 1.1, (255, 255, 255), 3)
-        cv2.putText(img, "Verifique conexion USB", (170, 270), font, 0.7, (180, 180, 180), 2)
+        
+        scale_main = min(width, height) / 600   # escala proporcional
+        thickness_main = max(2, int(scale_main * 3))
+
+        text_main = "CAMARA NO DISPONIBLE"
+        text_sub = "Verifique conexion USB"
+
+        # Centrar texto principal
+        (w_main, h_main), _ = cv2.getTextSize(text_main, font, scale_main, thickness_main)
+        x_main = (width - w_main) // 2
+        y_main = height // 2 - 20
+
+        cv2.putText(img, text_main, (x_main, y_main),
+                    font, scale_main, (255, 255, 255), thickness_main)
+
+        # Texto secundario
+        scale_sub = scale_main * 0.6
+        thickness_sub = max(1, int(scale_sub * 2))
+
+        (w_sub, h_sub), _ = cv2.getTextSize(text_sub, font, scale_sub, thickness_sub)
+        x_sub = (width - w_sub) // 2
+        y_sub = y_main + 40
+
+        cv2.putText(img, text_sub, (x_sub, y_sub),
+                    font, scale_sub, (180, 180, 180), thickness_sub)
+
         return img
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+
+        labels = [
+            self.lbl_left,
+            self.lbl_top,
+            self.lbl_manual_left,
+            self.lbl_manual_top
+        ]
+
+        for lbl in labels:
+            if lbl is not None:
+                # Si no hay cámara activa en ese label
+                if not hasattr(self, "cap_left") or self.cap_left is None:
+                    img = self.create_no_camera_image(
+                        lbl.width(),
+                        lbl.height()
+                    )
+                    self.display_frame(img, lbl)
+    def update_camera_dependent_buttons(self, enabled: bool):
+        """
+        Activa o desactiva botones que dependen de las cámaras
+        """
+        self.btn_capture.setEnabled(enabled)
+        self.btn_auto_capture.setEnabled(enabled)
+        self.btn_manual_capture.setEnabled(enabled)
 
     def start_cameras(self):
         """
         Inicia el streaming de video con arquitectura de estados
         """
-        
+
         try:
             self.cap_left = OptimizedCamera(Config.CAM_LEFT_INDEX).start()
-            self.cap_top = OptimizedCamera(Config.CAM_TOP_INDEX).start()
-            
-            left_ok = self.cap_left.isOpened()
-            top_ok = self.cap_top.isOpened()
-            
-            if not left_ok or not top_ok:
-                error_msg = "❌ Error de hardware en:\n"
-                if not left_ok: error_msg += f"- Cámara Lateral (ID: {Config.CAM_LEFT_INDEX})\n"
-                if not top_ok:  error_msg += f"- Cámara Cenital (ID: {Config.CAM_TOP_INDEX})\n"
-                
-                QMessageBox.critical(self, "Error de Cámaras", error_msg)
-                
-                no_cam_img = self.create_no_camera_image()
-                for lbl in [self.lbl_left, self.lbl_top, self.lbl_manual_left, self.lbl_manual_top]:
-                    self.display_frame(no_cam_img, lbl)
-                
-                self.status_bar.set_camera_status(False)
-                self.status_bar.set_status("⚠️ Hardware de cámara no detectado", "error")
-                return
-            
-            self.timer.start(16)
-            self.status_bar.set_camera_status(True)
-            self.status_bar.set_status("🚀 Sistema de visión activo", "success")
-            fps_ms = int(1000 / Config.PREVIEW_FPS)  
-            self.timer.start(fps_ms)
-            self.last_frame_time = time.time()
-            
+            self.cap_top  = OptimizedCamera(Config.CAM_TOP_INDEX).start()
 
-            
+            left_ok = self.cap_left and self.cap_left.isOpened()
+            top_ok  = self.cap_top and self.cap_top.isOpened()
+
+            if not left_ok or not top_ok:
+
+                error_msg = "❌ Error de hardware en:\n"
+                if not left_ok:
+                    error_msg += f"- Cámara Lateral (ID: {Config.CAM_LEFT_INDEX})\n"
+                if not top_ok:
+                    error_msg += f"- Cámara Cenital (ID: {Config.CAM_TOP_INDEX})\n"
+
+                QMessageBox.critical(self, "Error de Cámaras", error_msg)
+
+                labels = [
+                    self.lbl_left,
+                    self.lbl_top,
+                    self.lbl_manual_left,
+                    self.lbl_manual_top
+                ]
+
+                for lbl in labels:
+                    no_cam_img = self.create_no_camera_image(
+                        lbl.width(),
+                        lbl.height()
+                    )
+                    self.display_frame(no_cam_img, lbl)
+
+                self.cameras_connected = False
+                self.update_camera_dependent_buttons(False)
+
+                self.status_bar.set_camera_status(False)
+                self.status_bar.set_status(
+                    "⚠️ Hardware de cámara no detectado",
+                    "error"
+                )
+
+                return False
+
+            fps_ms = int(1000 / Config.PREVIEW_FPS)
+            self.timer.start(fps_ms)
+
+            self.last_frame_time = time.time()
+
+            self.cameras_connected = True
+            self.update_camera_dependent_buttons(True)
+
+            self.status_bar.set_camera_status(True)
+            self.status_bar.set_status(
+                "🚀 Sistema de visión activo",
+                "success"
+            )
+
+            return True
+
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error al iniciar cámaras:\n{str(e)}")
+
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Error al iniciar cámaras:\n{str(e)}"
+            )
+
             logger.error(f"Error al iniciar camaras: {str(e)}")
 
-            # Mostrar imagen "No Cámara"
-            no_cam_img = self.create_no_camera_image()
-            self.display_frame(no_cam_img, self.lbl_left)
-            self.display_frame(no_cam_img, self.lbl_top)
-            
+            labels = [
+                self.lbl_left,
+                self.lbl_top,
+                self.lbl_manual_left,
+                self.lbl_manual_top
+            ]
+
+            for lbl in labels:
+                no_cam_img = self.create_no_camera_image(
+                    lbl.width(),
+                    lbl.height()
+                )
+                self.display_frame(no_cam_img, lbl)
+
+            self.cameras_connected = False
+            self.update_camera_dependent_buttons(False)
+
             self.status_bar.set_camera_status(False)
-            self.status_bar.set_status("❌ Error crítico de inicialización", "error")
-            
-    def toggle_camera_pause(self):
-        """Pausa o reanuda el visor de video"""
-        if not self.cap_left and not self.cap_top: return
-    
-        if self.timer.isActive():
-            self.timer.stop()
-            self.status_bar.set_status("⏸️ Streaming pausado", "warning")
-        else:
-            self.timer.start(16)
-            self.status_bar.set_status("▶️ Streaming reanudado", "success")
-    
+            self.status_bar.set_status(
+                "❌ Error crítico de inicialización",
+                "error"
+            )
+
+            return False
+
     def reconnect_cameras(self):
         """Libera y reconecta los puertos USB de forma segura"""
+
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self.status_bar.set_status("🔄 Reiniciando puertos USB...", "info")
 
         try:
-            if hasattr(self, 'timer'): self.timer.stop()
+            # Detener timer si existe
+            if hasattr(self, 'timer') and self.timer.isActive():
+                self.timer.stop()
 
+            # Liberar cámaras si existen
             for cam in ['cap_left', 'cap_top']:
-                obj = getattr(self, cam)
+                obj = getattr(self, cam, None)  
                 if obj is not None:
-                    try: obj.release()
-                    except: pass
+                    try:
+                        obj.release()
+                    except Exception:
+                        pass
                     setattr(self, cam, None)
 
+            # Actualizar índices desde UI
             Config.CAM_LEFT_INDEX = self.spin_cam_left.value()
-            Config.CAM_TOP_INDEX = self.spin_cam_top.value()
+            Config.CAM_TOP_INDEX  = self.spin_cam_top.value()
 
-            # Reiniciar
-            self.start_cameras()
-            self.status_bar.set_status("📷 Cámaras conectadas.", "info")
+            # Intentar reconexión
+            connected = self.start_cameras()
+
+            if connected:
+                self.status_bar.set_status(
+                    "📷 Cámaras conectadas correctamente.",
+                    "success"
+                )
+            else:
+                self.status_bar.set_status(
+                    "❌ No se pudieron conectar las cámaras.",
+                    "error"
+                )
+
         finally:
             QApplication.restoreOverrideCursor()
      
@@ -4519,8 +4763,6 @@ class MainWindow(QMainWindow):
         self.btn_auto_capture.style().unpolish(self.btn_auto_capture)
         self.btn_auto_capture.style().polish(self.btn_auto_capture)
     
-    
-    
     def delete_selected_measurement(self):
         """Elimina de forma segura la medición seleccionada y su evidencia fotográfica"""
         selected_items = self.table_history.selectedItems()
@@ -4575,7 +4817,7 @@ class MainWindow(QMainWindow):
             self.status_bar.set_status("❌ Error al procesar la eliminación", "error")
     
     def edit_selected_measurement(self):
-        """Edita la medición seleccionada abriendo un Diálogo Estilizado"""
+        """Versión Blindada: Asegura que la ruta sea válida antes de abrir el editor."""
         selected_items = self.table_history.selectedItems()
         if not selected_items:
             self.status_bar.set_status("⚠️ Seleccione una fila para editar", "warning")
@@ -4584,37 +4826,53 @@ class MainWindow(QMainWindow):
         row = self.table_history.currentRow()
         try:
             measurement_id = int(self.table_history.item(row, 0).text())
-        except (AttributeError, ValueError):
-            self.status_bar.set_status("❌ Error al identificar el registro", "error")
-            return
+        except: return
 
         measurement_data = self.db.get_measurement_as_dict(measurement_id)
+        if not measurement_data: return
+
+        # --- REPARACIÓN DE RUTA ABSOLUTA ---
+        raw_path = measurement_data.get('image_path', "")
         
-        if not measurement_data:
-            QMessageBox.critical(self, "Error de Datos", f"No se encontró el registro {measurement_id}")
-            return
+        # Intentamos normalizar la ruta para Windows
+        if raw_path:
+            raw_path = os.path.abspath(raw_path)
+            
+            if not os.path.exists(raw_path):
+                filename = os.path.basename(raw_path)
+                # Buscamos directamente en las carpetas de resultados del proyecto
+                posibles = [
+                    os.path.abspath(os.path.join("Resultados", "Imagenes_Manuales", filename)),
+                    os.path.abspath(os.path.join("Resultados", "Imagenes_Automaticas", filename)),
+                    os.path.join(Config.IMAGES_MANUAL_DIR, filename)
+                ]
+                for p in posibles:
+                    if os.path.exists(p):
+                        raw_path = p
+                        print(f"✅ MainWindow encontró la imagen en: {p}")
+                        break
+        
+        # Le pasamos la ruta YA REPARADA al diccionario
+        measurement_data['image_path'] = raw_path
 
+        # Abrir el diálogo
         dialog = EditMeasurementDialog(measurement_data, parent=self)
-
         if dialog.exec() == QDialog.DialogCode.Accepted:
             updated_data = dialog.get_updated_data()
-            
             if self.db.update_measurement(measurement_id, updated_data):
-                self.status_bar.set_status(f"✅ Registro {measurement_id} actualizado con éxito", "success")
-                logger.info(f"Edición manual exitosa: ID {measurement_id}")
-                
+                self.status_bar.set_status(f"✅ Registro e imagen actualizados.", "success")
                 self.refresh_history()
             else:
-                QMessageBox.critical(self, "Error de Guardado", "No se pudieron persistir los cambios en la base de datos.")
+                QMessageBox.critical(self, "Error", "No se pudo actualizar la BD.")
    
     def view_measurement_image(self):
         """
-        Abre el visor de imágenes pasando TODOS los datos de la BD.
+        Abre el visor. Si la ruta falla, busca el archivo por su FECHA exacta.
         """
         # 1. Validación de selección
         selected = self.table_history.selectedItems()
         if not selected:
-            self.status_bar.set_status("⚠️ Seleccione una medición para ver la imagen", "warning")
+            self.status_bar.set_status("⚠️ Seleccione una medición", "warning")
             return
         
         row = self.table_history.currentRow()
@@ -4622,50 +4880,104 @@ class MainWindow(QMainWindow):
             m_id = int(self.table_history.item(row, 0).text())
         except (AttributeError, ValueError): return
 
-        # 2. Obtener datos COMPLETOS de la BD
+        # 2. Obtener datos de BD
         m_data = self.db.get_measurement_as_dict(m_id)
-        
         if not m_data:
-            self.status_bar.set_status("❌ No se pudo recuperar la información de la BD", "error")
+            self.status_bar.set_status("❌ Error de lectura BD", "error")
             return
 
-        # 3. Extraer ruta de imagen con validación
-        image_path = str(m_data.get('image_path', ""))
+        # -------------------------------------------------------------
+        # 3. RECUPERACIÓN INTELIGENTE DE IMAGEN (El arreglo)
+        # -------------------------------------------------------------
+        image_path = str(m_data.get('image_path', "")).strip()
+        archivo_encontrado = None
+
+        # CASO A: La ruta existe y es válida
+        if image_path and os.path.exists(image_path):
+            archivo_encontrado = image_path
         
-        if not image_path or not os.path.exists(image_path):
-            self.status_bar.set_status(f"🖼️ Imagen no encontrada en: {image_path}", "error")
-            QMessageBox.warning(self, "Archivo no encontrado", 
-                              f"La imagen asociada al registro {m_id} no existe en el disco.")
-            return
-
-        # 4. ¡ESTE ERA EL ERROR! 
-        # No crees un diccionario nuevo recortado. Usa m_data directamente.
-        measurement_info = m_data 
-
-        # 5. Lanzar Visor
-        try:
-            self.status_bar.set_status(f"🔍 Visualizando registro {m_id}...", "info")
+        # CASO B: Ruta vacía o rota -> INICIAMOS BÚSQUEDA FORENSE
+        else:
+            self.status_bar.set_status(f"🔍 Buscando imagen perdida para ID {m_id}...", "warning")
             
-            dialog = ImageViewerDialog(
-                image_path,
-                measurement_info,  
-                self.advanced_detector,
-                getattr(self, 'scale_front_left', 1.0),
-                getattr(self, 'scale_back_left', 1.0),
-                getattr(self, 'scale_front_top', 1.0),
-                getattr(self, 'scale_back_top', 1.0),
-                parent=self,  # Es bueno pasar self como parent
-                on_update_callback=self.refresh_history
-            )
+            # Usamos el Timestamp para hallar el archivo (es la huella digital única)
+            # Formato en BD: "2026-02-11 18:30:00" -> Buscamos "20260211_183000"
+            ts_str = str(m_data.get('timestamp', ""))
+            fish_id = str(m_data.get('fish_id', ""))
             
-            if dialog.exec():
-                self.refresh_history()
+            try:
+                # Limpiamos la fecha para que coincida con el nombre del archivo
+                ts_clean = ts_str.replace("-", "").replace(":", "").replace(" ", "_")
+                # Tomamos solo la parte YYYYMMDD_HHMMSS (primeros 15 caracteres)
+                # por si el string tiene milisegundos o cosas extra
+                key_search = ts_clean[:15] 
+            except:
+                key_search = "INVALIDO"
+
+            # Directorios donde buscar
+            search_dirs = [
+                Config.IMAGES_MANUAL_DIR,
+                Config.IMAGES_AUTO_DIR,
+                os.getcwd()
+            ]
+
+            if len(key_search) > 10: # Solo buscamos si la fecha parece válida
+                import glob
                 
-        except Exception as e:
-            logger.error(f"Error crítico en visor: {e}")
-            QMessageBox.critical(self, "Error de Visor", f"No se pudo cargar el componente visual:\n{e}")
+                for carpeta in search_dirs:
+                    if not os.path.exists(carpeta): continue
+                    
+                    # Buscamos cualquier JPG que contenga esa fecha exacta
+                    # Patrón: *20260211_183000*.jpg
+                    patron = os.path.join(carpeta, f"*{key_search}*.jpg")
+                    coincidencias = glob.glob(patron)
+                    
+                    if coincidencias:
+                        # Si encontramos uno, ¡BINGO!
+                        archivo_encontrado = coincidencias[0]
+                        # Opcional: Preferir el que tenga el mismo ID si hay varios
+                        for c in coincidencias:
+                            if fish_id in os.path.basename(c):
+                                archivo_encontrado = c
+                                break
+                        break # Dejamos de buscar
 
-    
+        # -------------------------------------------------------------
+        # 4. RESULTADO FINAL
+        # -------------------------------------------------------------
+        if archivo_encontrado:
+            # ¡Éxito! Abrimos el visor con el archivo recuperado
+            try:
+                # Opcional: Auto-reparar la BD para la próxima vez
+                if archivo_encontrado != image_path:
+                   print(f"✅ Imagen recuperada y re-vinculada: {archivo_encontrado}")
+                   # self.db.update_measurement_path(m_id, archivo_encontrado)
+
+                self.status_bar.set_status(f"🔍 Visualizando registro {m_id}", "info")
+                
+                dialog = ImageViewerDialog(
+                    archivo_encontrado, # Usamos la ruta recuperada
+                    m_data,  
+                    self.advanced_detector,
+                    getattr(self, 'scale_front_left', 1.0),
+                    getattr(self, 'scale_back_left', 1.0),
+                    getattr(self, 'scale_front_top', 1.0),
+                    getattr(self, 'scale_back_top', 1.0),
+                    parent=self,
+                    on_update_callback=self.refresh_history
+                )
+                if dialog.exec():
+                    self.refresh_history()
+
+            except Exception as e:
+                QMessageBox.critical(self, "Error Visor", f"Fallo al abrir visualizador:\n{e}")
+        else:
+            # Fallo total
+            QMessageBox.warning(self, "Imagen No Encontrada", 
+                f"No se pudo localizar la imagen para el registro #{m_id}.\n\n"
+                f"• Ruta BD: {image_path}\n"
+                f"• Fecha buscada: {m_data.get('timestamp')}\n\n"
+                "Verifique si el archivo fue eliminado manualmente de la carpeta 'Capturas'.")
     def export_statistics(self):
         """
         📊 EXPORTAR PANEL COMPLETO (6 en 1):

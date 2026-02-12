@@ -21,41 +21,76 @@ class SpineMeasurer:
     """
     Motor de medición biométrica de alta precisión basado en análisis topológico (Grafos + Splines).
     """
-
+    
     @staticmethod
     def get_spine_info(mask_uint8: np.ndarray) -> Tuple[float, Optional[np.ndarray]]:
-        """
-        Calcula la longitud (px) y devuelve la visualización del esqueleto.
-        """
         if mask_uint8 is None or cv2.countNonZero(mask_uint8) < 100:
             return 0.0, None
 
-        # 1. Pre-procesamiento
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        # 1. Limpieza de máscara
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         binary = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=1)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-        # 2. Esqueletización
+        # 2. Esqueletización y primer recorte
         try:
             skeleton = cv2.ximgproc.thinning(binary, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN)
-        except AttributeError:
-            skeleton = SpineMeasurer._skeletonize_fallback(binary)
+            skeleton = cv2.bitwise_and(skeleton, binary) # Candado 1
         except Exception as e:
-            logger.error("Error en esqueletizacion", exc_info=True)
+            logger.error(f"Error en esqueletizacion: {e}")
             return 0.0, None
 
-        # 3. Análisis de Grafo 
+        # 3. Análisis de Grafo
         ordered_points_yx = SpineMeasurer._get_longest_path_graph(skeleton)
-        
         if ordered_points_yx is None:
-            logger.warning("No se pudo extraer un camino valido del esqueleto.")
             return 0.0, skeleton
 
-        # 4. Medición Sub-píxel con Splines
-        length_px = SpineMeasurer._calculate_spline_length(ordered_points_yx)
+        # 4. Medición Sub-píxel con DIBUJO PROTEGIDO
+        # Ahora devolvemos la visualización de la curva ya recortada
+        length_px, visualization = SpineMeasurer._calculate_spline_and_visualize(ordered_points_yx, binary)
         
-        return length_px, skeleton
+        return length_px, visualization
 
+    @staticmethod
+    def _calculate_spline_and_visualize(points_yx: np.ndarray, mask_limit: np.ndarray) -> Tuple[float, np.ndarray]:
+        """
+        Calcula longitud y genera la imagen roja asegurando que nada se salga del pez.
+        """
+        h, w = mask_limit.shape
+        curve_viz = np.zeros((h, w), dtype=np.uint8)
+        
+        if len(points_yx) < 5:
+            # Si hay pocos puntos, dibujar líneas rectas simples
+            for i in range(len(points_yx)-1):
+                p1 = (int(points_yx[i][1]), int(points_yx[i][0]))
+                p2 = (int(points_yx[i+1][1]), int(points_yx[i+1][0]))
+                cv2.line(curve_viz, p1, p2, 255, 1)
+            final_viz = cv2.bitwise_and(curve_viz, mask_limit)
+            return float(cv2.countNonZero(final_viz)), final_viz
+
+        try:
+            y, x = points_yx[:, 0], points_yx[:, 1]
+            tck, u = splprep([y, x], s=0.05, k=3) 
+            u_fine = np.linspace(0, 1, len(x) * 15) 
+            new_points = splev(u_fine, tck)
+            v_y, v_x = new_points[0], new_points[1]
+
+            # Dibujamos el spline en un lienzo temporal
+            for i in range(len(v_x) - 1):
+                p1 = (int(v_x[i]), int(v_y[i]))
+                p2 = (int(v_x[i+1]), int(v_y[i+1]))
+                # Verificación de bordes de imagen
+                if (0 <= p1[1] < h and 0 <= p1[0] < w and 0 <= p2[1] < h and 0 <= p2[0] < w):
+                    cv2.line(curve_viz, p1, p2, 255, 1)
+
+            # EL SEGURO FINAL: Bitwise AND con la máscara
+            # Esto borra cualquier píxel rojo que la matemática haya tirado fuera del pez
+            guaranteed_spine = cv2.bitwise_and(curve_canvas := curve_viz, mask_limit)
+            
+            return float(cv2.countNonZero(guaranteed_spine)), guaranteed_spine
+
+        except Exception:
+            return 0.0, mask_limit # Fallback
+        
     @staticmethod
     def _get_longest_path_graph(skeleton: np.ndarray) -> Optional[np.ndarray]:
         """
@@ -110,47 +145,7 @@ class SpineMeasurer:
             return None
 
         return np.array(best_path)
-
-    @staticmethod
-    def _calculate_spline_length(points_yx: np.ndarray) -> float:
-        """
-        Ajusta spline a los puntos ordenados para medición sub-píxel.
-        """
-        if len(points_yx) < 5:
-            diffs = np.diff(points_yx, axis=0)
-            return float(np.sum(np.sqrt(np.sum(diffs**2, axis=1))))
-
-        try:
-            y = points_yx[:, 0]
-            x = points_yx[:, 1]
-            
-            keep = np.ones(len(x), dtype=bool)
-            for i in range(1, len(x)):
-                if x[i] == x[i-1] and y[i] == y[i-1]:
-                    keep[i] = False
-            
-            if np.sum(keep) < 4: return 0.0
-            
-            x = x[keep]
-            y = y[keep]
-
-            smoothing = len(x) * 2.0 
-            tck, u = splprep([y, x], s=smoothing, k=3) 
-            
-            u_fine = np.linspace(0, 1, len(x) * 10) 
-            new_points = splev(u_fine, tck)
-            new_y, new_x = new_points[0], new_points[1]
-            
-            diffs = np.sqrt(np.diff(new_x)**2 + np.diff(new_y)**2)
-            length = np.sum(diffs)
-            
-            return float(length)
-
-        except Exception as e:
-            logger.info("Fallo spline, usando distancia euclidiana.", exc_info=True)
-            diffs = np.diff(points_yx, axis=0)
-            return float(np.sum(np.sqrt(np.sum(diffs**2, axis=1))))
-
+        
     @staticmethod
     def _skeletonize_fallback(img: np.ndarray) -> np.ndarray:
         """Fallback lento usando morfología estándar."""
