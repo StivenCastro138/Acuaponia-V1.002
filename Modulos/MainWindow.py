@@ -27,6 +27,7 @@ import cv2
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import qtawesome as qta  
 from PySide6.QtMultimedia import QSoundEffect
 from PySide6.QtCore import (
     Qt, QTimer, QSize, QDate, QTime, QUrl,
@@ -36,7 +37,7 @@ from PySide6.QtGui import (
     QImage, QPixmap, QColor, QFont, QIcon, QIntValidator, QAction
 )
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget,
+    QApplication, QMainWindow, QWidget, QSystemTrayIcon,
     QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
     QPushButton, QLabel, QTextEdit, QProgressBar,
     QTabWidget, QTabBar, QGroupBox, QFrame,
@@ -111,8 +112,9 @@ class MainWindow(QMainWindow):
         "📷": "info", "▶️": "info", "⚙️": "info", "🧠": "info"
     }
     
-    def __init__(self):
+    def __init__(self, api_service=None):
         super().__init__()
+        self.api_service = api_service
         self.setWindowTitle("FishTrace v1.2b")
         self.setGeometry(100, 100, 1600, 1000)
             
@@ -146,19 +148,32 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon("logo.ico"))
         self.load_config()
         self.init_ui()
+        self.init_tray()
         self.sync_ui_with_config()
         self.apply_appearance()
         self.toggle_theme("Sistema")
+        
+        self.ram_timer = QTimer(self)
+        self.alert_timer = QTimer(self) # Timer para el parpadeo
+        self.is_alert_icon = False      # Estado del parpadeo
 
-        # CONEXIONES DE SEÑALES Y TIMERS 
+        # 2. LUEGO HACEMOS LAS CONEXIONES
         if hasattr(self.processor, 'signals'):
             self.processor.signals.ia_time_ready.connect(self.status_bar.set_ia_time)
         
-        # Conecta el progreso y resultados
+        # Conexiones del procesador
         self.processor.progress_update.connect(self.on_progress_update)
         self.processor.result_ready.connect(self.on_processing_complete)
-        self.ram_timer = QTimer(self)
-        self.ram_timer.timeout.connect(self.status_bar.update_system_info)  
+        
+        # Conexiones de la API y Salud del Sistema
+        self.ram_timer.timeout.connect(self.status_bar.update_system_info)
+        self.ram_timer.timeout.connect(self.update_api_status_ui)      # Actualiza texto URL
+        self.ram_timer.timeout.connect(self.check_api_health_for_tray) # Inicia parpadeo si falla
+        
+        # Conexión del motor de parpadeo
+        self.alert_timer.timeout.connect(self.toggle_alert_icon)
+        
+        # 3. FINALMENTE INICIAMOS LOS TIMERS
         self.ram_timer.start(5000)
         
         self.save_sound = QSoundEffect(self)
@@ -212,14 +227,7 @@ class MainWindow(QMainWindow):
 
         self.processor.start()
         self.start_cameras()
-        self.status_bar.set_status("🚀 Sistema listo. Esperando captura")
-        
-        try:
-            self.api_service = ApiService(port=5000)
-            self.api_service.start()
-        except Exception as e:
-            logger.error(f"Error API: {e}")
-        self.ram_timer.timeout.connect(self.update_api_status_ui)
+        self.status_bar.set_status("Sistema listo. Esperando captura")
         
     def init_ui(self):
         central_widget = QWidget()
@@ -265,7 +273,7 @@ class MainWindow(QMainWindow):
         self.tabs.tabBar().setTabToolTip(4, "Parámetros y configuración del sistema")
 
         self.tabs.tabBar().setCursor(Qt.PointingHandCursor)
-        
+           
     def update_api_status_ui(self):
         """Sincroniza el estado del servicio API con el botón de la StatusBar"""
         if hasattr(self, 'api_service'):
@@ -317,13 +325,18 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'btn_capture'):
             self.btn_capture.setEnabled(True)
             self.btn_capture.setText("Capturar y Analizar")
-            self.btn_capture.setProperty("class", "primary") 
-            self.btn_capture.style().unpolish(self.btn_capture)
-            self.btn_capture.style().polish(self.btn_capture)
+            self.btn_capture.setProperty("class", "primary")
+            icon_color = self.btn_capture.palette().buttonText().color()
+            self.btn_capture.setIcon(qta.icon("fa5s.camera", color=icon_color))
+            self._refresh_widget_style(self.btn_capture)
 
         if hasattr(self, 'btn_manual_ai_assist'):
             self.btn_manual_ai_assist.setEnabled(True)
             self.btn_manual_ai_assist.setText("Analizar y Rellenar con IA")
+            self.btn_qr.setEnabled(False)
+            
+        if hasattr(self, 'btn_qr'):
+            self.btn_qr.setEnabled(True)
 
         # VALIDACIÓN ROBUSTA DEL RESULTADO
         if not result or not isinstance(result, dict):
@@ -554,7 +567,7 @@ class MainWindow(QMainWindow):
         self.results_text.setPlainText(message)
         
         if hasattr(self, 'status_bar'):
-            self.status_bar.set_status("❌ Error en detección", "error")
+            self.status_bar.set_status("Error en detección", "error")
             
         if hasattr(self, 'confidence_bar'):
             self.confidence_bar.setValue(0)
@@ -631,13 +644,13 @@ class MainWindow(QMainWindow):
                     new_notes = f"{current_notes} {ia_note}".strip()
                     self.txt_manual_notes.setText(new_notes)
   
-            self.status_bar.set_status(f"✅ Formulario rellenado (Confianza: {confidence:.0%})", "success")
+            self.status_bar.set_status(f"Formulario rellenado (Confianza: {confidence:.0%})", "success")
             
             logger.info(f"Formulario manual auto-rellenado con confianza {confidence:.0%}.")
             
         except Exception as e:
             logger.error(f"Error en auto-rellenado manual: {e}.", exc_info=True)
-            self.status_bar.set_status("⚠️ Error al rellenar formulario", "warning")
+            self.status_bar.set_status("Error al rellenar formulario", "warning")
 
     def _reset_widget_style(self, widget):
         """Helper para limpiar el estado visual"""
@@ -703,30 +716,29 @@ class MainWindow(QMainWindow):
             self.btn_save.style().polish(self.btn_save)
 
     def _handle_stability_and_autocapture(self, result, confidence, warnings, fish_detected):
-        """Manejo de estabilidad, detección y captura"""
-
+        """Manejo de estabilidad, detección y captura automatizada."""
+        
+        # 1. CASO: NO HAY PEZ
         if not fish_detected:
-            self.lbl_stability.setText("🔍 NO SE DETECTA PEZ")
-            self.lbl_stability.setProperty("state", "neutral")
-
-            self.lbl_stability.style().unpolish(self.lbl_stability)
-            self.lbl_stability.style().polish(self.lbl_stability)
-
+            self.lbl_stability.setText("NO SE DETECTA ESPÉCIMEN")
+            self.lbl_stability.setProperty("state", "neutral") # Gris en CSS
+            self._refresh_widget_style(self.lbl_stability)
             return
 
+        # 2. CASO: PEZ DETECTADO - EVALUAR ESTABILIDAD
         is_stable = result.get('is_stable', False)
         motion_level = result.get('motion_level', 0)
 
         if is_stable:
-            self.lbl_stability.setText("✅ PEZ ESTABLE")
-            self.lbl_stability.setProperty("state", "ok")
+            self.lbl_stability.setText("SISTEMA ESTABLE - LISTO")
+            self.lbl_stability.setProperty("state", "ok")      # Verde en CSS
         else:
-            self.lbl_stability.setText(f"⚠️ EN MOVIMIENTO ({motion_level:.0f}%)")
-            self.lbl_stability.setProperty("state", "warn")
+            self.lbl_stability.setText(f"EN MOVIMIENTO ({motion_level:.0f}%)")
+            self.lbl_stability.setProperty("state", "warn")    # Naranja en CSS
 
-        self.lbl_stability.style().unpolish(self.lbl_stability)
-        self.lbl_stability.style().polish(self.lbl_stability)
+        self._refresh_widget_style(self.lbl_stability)
 
+        # 3. LÓGICA DE AUTO-CAPTURA
         if (
             self.auto_capture_enabled
             and is_stable
@@ -734,22 +746,27 @@ class MainWindow(QMainWindow):
             and not self.processing_lock
             and len(warnings) == 0
         ):
+            self._execute_auto_capture_sequence()
 
-            self.processing_lock = True
-            self.status_bar.set_status("💾 Guardando medición automática...", "success")
+    def _refresh_widget_style(self, widget):
+        """Refresca el CSS del widget para aplicar cambios de estado."""
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
 
-            try:
-                QTimer.singleShot(17000, self._save_measurement_silent)
-                QTimer.singleShot(17050, self.save_sound.play)
-                QTimer.singleShot(22000, self.unlock_after_save)
+    def _execute_auto_capture_sequence(self):
+        """Encapsula la secuencia de guardado para limpiar el código principal."""
+        self.processing_lock = True
+        self.status_bar.set_status("Guardando medición automática...", "success")
 
-            except Exception as e:
-                logger.error(f"Error en auto-guardado: {e}")
-                self.processing_lock = False
-                self.status_bar.set_status(
-                    f"❌ Error al guardar: {str(e)}",
-                    "error"
-                )
+        try:
+            # Tiempos ajustados para feedback del usuario
+            QTimer.singleShot(100, self.save_sound.play) # Sonido inmediato
+            QTimer.singleShot(1500, self._save_measurement_silent)
+            QTimer.singleShot(5000, self.unlock_after_save)
+        except Exception as e:
+            logger.error(f"Error en auto-guardado: {e}")
+            self.processing_lock = False
+            self.status_bar.set_status(f"Error al guardar: {str(e)}", "error")
 
     def unlock_after_save(self):
         """
@@ -787,7 +804,7 @@ class MainWindow(QMainWindow):
                  self.confidence_bar.style().polish(self.confidence_bar)
                  
             if hasattr(self, 'status_bar'):
-                self.status_bar.set_status("⏳ Listo para próxima captura")
+                self.status_bar.set_status("Listo para próxima captura")
             
             logger.info("Sistema desbloqueado correctamente.")
 
@@ -802,10 +819,14 @@ class MainWindow(QMainWindow):
             self.processing_lock = False
             if hasattr(self, 'btn_capture'):
                 self.btn_capture.setEnabled(True)
-                self.btn_capture.setText("📸 Capturar y Analizar")
+                self.btn_capture.setText("Capturar y Analizar")
+                icon_color = self.btn_capture.palette().buttonText().color()
+                self.btn_capture.setIcon(qta.icon("fa5s.camera", color=icon_color))
                 self.btn_capture.setProperty("class", "primary")
-                self.btn_capture.style().unpolish(self.btn_capture)
-                self.btn_capture.style().polish(self.btn_capture)
+                self._refresh_widget_style(self.btn_capture)
+
+            if hasattr(self, 'btn_qr'):
+                self.btn_qr.setEnabled(True)
             
             self.results_text.clear()
             self._set_results_style("error")
@@ -816,7 +837,7 @@ class MainWindow(QMainWindow):
                 " • Intenta capturar de nuevo\n"
                 " • Verifica la iluminación"
             )
-            self.status_bar.set_status("⚠️ Procesamiento cancelado por timeout")
+            self.status_bar.set_status("Procesamiento cancelado por timeout")
             
             if hasattr(self, 'processor') and hasattr(self.processor, 'queue'):
                 try:
@@ -829,27 +850,50 @@ class MainWindow(QMainWindow):
         """
         old_tab = self.current_tab
         self.current_tab = index
-        
+
         if hasattr(self, 'processor') and hasattr(self.processor, 'motion_detector'):
             self.processor.motion_detector.reset()
-        
+
+        # Si estaba activa la auto-captura, desactivarla correctamente
         if hasattr(self, 'auto_capture_enabled') and self.auto_capture_enabled:
             self.auto_capture_enabled = False
+
             if hasattr(self, 'btn_auto_capture'):
                 self.btn_auto_capture.setChecked(False)
-                self.btn_auto_capture.setText("🔄 Auto-Captura")
-                self.btn_auto_capture.setProperty("class", "secondary")
+
+                btn_class = "secondary"
+                icon_name = "fa5s.play"
+
+                self.btn_auto_capture.setText(" Iniciar Auto-Captura")
+                self.btn_auto_capture.setProperty("class", btn_class)
+
+                # Guardar metadatos para refresco en cambio de tema
+                self.btn_auto_capture._icon_name = icon_name
+                self.btn_auto_capture._icon_class = btn_class
+
+                # Regenerar icono con color correcto
+                icon_color = self._btn_text_colors.get(btn_class, "#ffffff")
+                self.btn_auto_capture.setIcon(
+                    qta.icon(icon_name, color=icon_color)
+                )
+                self.btn_auto_capture.setIconSize(QSize(18, 18))
+
+                # Refrescar estilos
                 self.btn_auto_capture.style().unpolish(self.btn_auto_capture)
                 self.btn_auto_capture.style().polish(self.btn_auto_capture)
-        
+                self.btn_auto_capture.update()
+
         self.preview_fps = Config.PREVIEW_FPS
 
         if hasattr(self, 'timer') and self.timer.isActive():
-            fps_ms = int(1000 / self.preview_fps)  
+            fps_ms = int(1000 / self.preview_fps)
             self.timer.setInterval(fps_ms)
 
-        arrow = chr(0x2192) 
-        logger.info(f"Pestana cambiada: {old_tab} {arrow} {index}, FPS: {self.preview_fps}")
+        arrow = chr(0x2192)
+        logger.info(
+            f"Pestana cambiada: {old_tab} {arrow} {index}, FPS: {self.preview_fps}"
+        )
+
         
     def create_measurement_tab(self):
         widget = QWidget()
@@ -871,10 +915,7 @@ class MainWindow(QMainWindow):
         self.lbl_left.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_left.setToolTip("Cámara encargada de medir Longitud y Altura del lomo del pez.")
         left_layout.addWidget(self.lbl_left)
-        
-        self.lbl_stability = QLabel("⚪ Esperando espécimen...")
-        self.lbl_stability.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        left_layout.addWidget(self.lbl_stability)
+    
         video_layout.addWidget(left_group)
         
         # Cámara Cenital
@@ -887,9 +928,6 @@ class MainWindow(QMainWindow):
         self.lbl_top.setToolTip("Cámara encargada de medir el Ancho dorsal del pez.")
         top_layout.addWidget(self.lbl_top)
         
-        self.lbl_roi = QLabel("📌 ROI: Activo")
-        self.lbl_roi.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        top_layout.addWidget(self.lbl_roi)
         video_layout.addWidget(top_group)
 
         layout.addLayout(video_layout)
@@ -906,6 +944,11 @@ class MainWindow(QMainWindow):
         self.results_text.setPlaceholderText("Esperando detección para generar reporte...")
         results_layout.addWidget(self.results_text)
         
+        self.lbl_stability = QLabel("Esperando espécimen...")
+        self.lbl_stability.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_stability.setProperty("state", "dim") 
+        results_layout.addWidget(self.lbl_stability)
+
         confidence_layout = QHBoxLayout()
         lbl_conf = QLabel("Calidad de Detección:")
         lbl_conf.setStyleSheet("font-weight: bold;")
@@ -914,8 +957,8 @@ class MainWindow(QMainWindow):
         self.confidence_bar = QProgressBar()
         self.confidence_bar.setMaximum(100)
         self.confidence_bar.setFormat("%p% Confianza")
-        self.confidence_bar.setToolTip("Precisión estimada de la IA basada en la nitidez y posición del pez.")
         confidence_layout.addWidget(self.confidence_bar)
+        
         results_layout.addLayout(confidence_layout)
         
         layout.addWidget(results_group)
@@ -934,13 +977,14 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.btn_capture)
         
         
-        self.btn_auto_capture = QPushButton("▶️ Activar Auto-Captura")
+        self.btn_auto_capture = QPushButton(" Activar Auto-Captura")
         self.btn_auto_capture.setCheckable(True)
-        self.btn_auto_capture.setProperty("class", "secondary") 
-        self.btn_auto_capture.style().unpolish(self.btn_auto_capture) 
-        self.btn_auto_capture.style().polish(self.btn_auto_capture)
         self.btn_auto_capture.setCursor(Qt.PointingHandCursor)
+        self.btn_auto_capture.setMinimumHeight(40)
         self.btn_auto_capture.setToolTip("El sistema detectará automáticamente cuando el pez esté quieto para medirlo.")
+        icon_color = self.btn_auto_capture.palette().buttonText().color()
+        self.btn_auto_capture.setIcon(qta.icon("fa5s.play", color=icon_color))
+        self.btn_auto_capture.setProperty("class", "secondary") 
         self.btn_auto_capture.clicked.connect(self.toggle_auto_capture)
         controls_layout.addWidget(self.btn_auto_capture)
         
@@ -960,50 +1004,62 @@ class MainWindow(QMainWindow):
     
     def capture_and_analyze(self):
         """
-        Captura frames y los envía al hilo de procesamiento con FEEDBACK VISUAL COMPLETO.
+        Captura frames y los envía al hilo de procesamiento con FEEDBACK VISUAL ANIMADO.
         """
+        # 1. VALIDACIONES INICIALES
         if self.processing_lock:
             logger.warning("Procesamiento ya en curso, ignorando nueva captura.")
-            self.status_bar.set_status("⚠️ Ya hay un análisis en proceso", "warning")
+            self.status_bar.set_status("Ya existe un análisis en proceso", "warning")
             return
         
         if not self.cap_left or not self.cap_top:
-            QMessageBox.warning(self, "Error", "❌ Cámaras no disponibles")
+            QMessageBox.critical(self, "Error de Hardware", "Los sensores de imagen no están disponibles.")
             return
         
         ret_left, frame_left = self.cap_left.read()
         ret_top, frame_top = self.cap_top.read()
         
         if not (ret_left and ret_top):
-            QMessageBox.warning(self, "Error", "❌ No se pudieron capturar frames")
+            QMessageBox.critical(self, "Error de Captura", "No se pudo obtener el flujo de datos de las cámaras.")
             return
         
-        # BLOQUEO DE INTERFAZ Y FEEDBACK VISUAL INMEDIATO
+        # 2. BLOQUEO DE INTERFAZ Y FEEDBACK VISUAL (ESTADO DE CARGA)
         self.processing_lock = True
-        self.btn_capture.setEnabled(False)
-        self.btn_capture.setText("⏳ Analizando...")
-        self.btn_capture.setProperty("class", "warning") 
-        self.btn_capture.style().unpolish(self.btn_capture)
-        self.btn_capture.style().polish(self.btn_capture)
         
-        self.status_bar.set_status("🔍 IA Procesando captura...", "info")
+        if hasattr(self, 'btn_qr'):
+            self.btn_qr.setEnabled(False)
+        
+        # Configurar Botón con Spinner Animado
+        self.btn_capture.setEnabled(False)
+        self.btn_capture.setText(" Analizando...")
+        icon_color = self.btn_capture.palette().buttonText().color()
+        self.btn_capture.setIcon(qta.icon( "fa5s.spinner", color=icon_color, animation=qta.Spin(self.btn_capture)))
+        self.btn_capture.setProperty("class", "warning") 
+        self._refresh_widget_style(self.btn_capture)
+        
+        self.status_bar.set_status("IA Procesando captura manual...", "info")
+        
+        # Reiniciar Barra de Confianza
         if hasattr(self, 'confidence_bar'):
              self.confidence_bar.setValue(0)
              self.confidence_bar.setProperty("state", "idle")
-             self.confidence_bar.style().unpolish(self.confidence_bar)
-             self.confidence_bar.style().polish(self.confidence_bar)
+             self._refresh_widget_style(self.confidence_bar)
      
+        # 3. PREPARAR ÁREA DE RESULTADOS (LIMPIEZA Y FORMATO)
         self.results_text.clear()
-        self._set_results_style("warning")
-        self.results_text.append("🔄 INICIANDO ANÁLISIS BIOMÉTRICO\n")
-        self.results_text.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-        self.results_text.append("⏱️ Procesando... (Esto puede tomar 10-15 segundos)\n")
-        self.results_text.append("🔍 Detectando contornos en ambas cámaras...\n")
-        self.results_text.append("📊 Calculando métricas morfométricas...\n")
-        self.results_text.append("🤖 Ejecutando validación anatómica...\n")
-        self.results_text.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+        self.results_text.setProperty("state", "info") # Borde azul informativo
+        self._refresh_widget_style(self.results_text)
         
-        #  PREPARAR PARÁMETROS COMPLETOS 
+        # Usamos un formato más limpio sin tantos caracteres ASCII
+        self.results_text.append("INICIANDO ANÁLISIS BIOMÉTRICO")
+        self.results_text.append("-" * 40)
+        self.results_text.append("• Localizando espécimen en espacio 3D...")
+        self.results_text.append("• Extrayendo nubes de puntos morfométricas...")
+        self.results_text.append("• Validando integridad de la muestra...")
+        self.results_text.append("-" * 40)
+        self.results_text.append("\nProcesando... (Tiempo estimado: 10-15s)")
+        
+        # 4. PREPARAR PARÁMETROS TÉCNICOS
         params = {
             'scales': {
                 'lat_front': self.scale_front_left,
@@ -1020,12 +1076,12 @@ class MainWindow(QMainWindow):
             }
         }
         
-        # ENVIAR AL PROCESADOR 
+        # 5. ENVÍO AL PROCESADOR (HILO SECUNDARIO)
         self.processor.add_frame(frame_left, frame_top, params)
         
-        # SEGURO DE DESBLOQUEO
+        # 6. SEGURO DE DESBLOQUEO (WATCHDOG)
         QTimer.singleShot(20000, self.force_unlock_if_stuck)
-        logger.info("Captura manual enviada al FrameProcessor con parametros completos.")    
+        logger.info("Captura enviada al FrameProcessor.")
         
     def sync_modules_parameters(self):
         """
@@ -1054,7 +1110,7 @@ class MainWindow(QMainWindow):
                 max_len=self.spin_max_length.value()
             )
         
-        self.status_bar.set_status("⚙️ Módulos sincronizados","info")
+        self.status_bar.set_status("Módulos sincronizados","info")
 
     def create_manual_tab(self):
         """Crea la pestaña de medición manual"""
@@ -1155,7 +1211,7 @@ class MainWindow(QMainWindow):
         self.btn_manual_save.clicked.connect(self.save_manual_measurement)
         self.btn_manual_save.setEnabled(False) 
         decision_layout.addWidget(self.btn_manual_save)
-
+        
         self.capture_decision_group.setVisible(False)
         layout.addWidget(self.capture_decision_group)
         
@@ -1251,6 +1307,7 @@ class MainWindow(QMainWindow):
         decision = dialog.exec() 
 
         if decision in [1, 2]: 
+            self.processing_lock = True
             self.manual_frame_left = frame_l
             self.manual_frame_top = frame_t
             
@@ -1259,19 +1316,20 @@ class MainWindow(QMainWindow):
             
             self.btn_manual_capture.setEnabled(False)
             self.btn_load_image.setEnabled(False)
+            self.btn_qr.setEnabled(False)
             self.capture_decision_group.setVisible(True)
             
             if decision == 1:
-                self.status_bar.set_status("🔍 Procesando biometría con IA...", "info")
+                self.status_bar.set_status("Procesando biometría con IA...", "info")
                 self.run_ai_assist_manual() 
             
             elif decision == 2:
                 self.btn_manual_save.setEnabled(True)
                 self.txt_manual_fish_id.setFocus()
-                self.status_bar.set_status("✏️ Modo Manual: Ingrese los datos y guarde el registro.", "info")
+                self.status_bar.set_status("Modo Manual: Ingrese los datos y guarde el registro.", "info")
                 
         else: 
-            self.status_bar.set_status("🗑️ Captura descartada. Cámara en vivo.", "warning")
+            self.status_bar.set_status("Captura descartada. Cámara en vivo.", "warning")
             
     def _calculate_k_factor(self, length_cm, weight_g):
         """Calcula el Factor K de Fulton con validación."""
@@ -1573,9 +1631,9 @@ class MainWindow(QMainWindow):
         layout.addLayout(btn_layout)
         
         if dialog.exec() == QDialog.Accepted:
-            self.status_bar.set_status("✅ Imagen externa procesada y guardada.", "success")
+            self.status_bar.set_status("Imagen externa procesada y guardada.", "success")
         else:
-            self.status_bar.set_status("🗑️ Carga externa cancelada.", "warning")
+            self.status_bar.set_status("Carga externa cancelada.", "warning")
 
     def _process_external_capture(self, image_path, is_mobile=False):
         """Diálogo de registro biométrico para fotos externas/móviles"""
@@ -1756,9 +1814,9 @@ class MainWindow(QMainWindow):
         layout.addLayout(btn_layout)
         
         if dialog.exec() == QDialog.Accepted:
-            self.status_bar.set_status("✅ Medición externa guardada con éxito", "success")
+            self.status_bar.set_status("Medición externa guardada con éxito", "success")
         else:
-            self.status_bar.set_status("🗑️ Captura externa descartada", "warning")         
+            self.status_bar.set_status("Captura externa descartada", "warning")         
 
     def launch_qr_capture(self):
         """
@@ -1783,7 +1841,7 @@ class MainWindow(QMainWindow):
             img.save(qr_path)
         except Exception as e:
             logger.error(f"Error generando QR: {e}.")
-            self.status_bar.set_status("❌ Error al generar código QR", "error")
+            self.status_bar.set_status("Error al generar código QR", "error")
             return
 
         dialog = QDialog(self)
@@ -1853,14 +1911,14 @@ class MainWindow(QMainWindow):
                 )
                 flask_thread.start()
                 self._flask_started = True
-                self.status_bar.set_status(f"🌐 Servidor activo en {pc_ip}", "success")
+                self.status_bar.set_status(f"Servidor activo en {pc_ip}", "success")
             except Exception as e:
                 logger.error(f"Error al iniciar Flask: {e}.")
-                self.status_bar.set_status("❌ Error al iniciar servidor", "error")
+                self.status_bar.set_status("Error al iniciar servidor", "error")
                 dialog.reject()
                 return
         else:
-            self.status_bar.set_status(f"🌐 Servidor reanudado en {pc_ip}", "info")
+            self.status_bar.set_status(f"Servidor reanudado en {pc_ip}", "info")
         
         timer = QTimer(dialog)
         timer.setInterval(300)
@@ -1917,14 +1975,14 @@ class MainWindow(QMainWindow):
             
             # Actualizar estado según resultado
             if result == QDialog.DialogCode.Accepted:
-                self.status_bar.set_status("✅ Captura móvil procesada correctamente")
+                self.status_bar.set_status("Captura móvil procesada correctamente")
             else:
-                self.status_bar.set_status("⛔ Captura móvil cancelada")
+                self.status_bar.set_status("Captura móvil cancelada")
                 logger.info("Usuario cancelo captura movil.")
         
         except Exception as e:
             logger.error(f"Error en dialogo de captura QR: {e}.", exc_info=True)
-            self.status_bar.set_status("❌ Error en captura móvil")
+            self.status_bar.set_status("Error en captura móvil")
 
     def verify_flask_server(ip, port=5000, timeout=2):
         """
@@ -1995,6 +2053,7 @@ class MainWindow(QMainWindow):
         self.capture_decision_group.setVisible(False)
         self.btn_manual_capture.setEnabled(True)
         self.btn_load_image.setEnabled(True)
+        self.btn_qr.setEnabled(True)
         
         self.spin_manual_length.setValue(0.0)
         self.spin_manual_height.setValue(0.0) 
@@ -2016,30 +2075,49 @@ class MainWindow(QMainWindow):
         self.update_k_factor_preview() #
         self.update_filename_preview()
         
-        self.status_bar.set_status("🔄 Cámara en vivo lista para nueva captura", "info")
+        self.status_bar.set_status("Cámara en vivo lista para nueva captura", "info")
         
         logger.info("Captura manual descartada, volviendo a video en vivo.")
     
     def run_ai_assist_manual(self):
         """
-        Ejecuta el análisis de IA sobre la foto capturada manualmente
+        Ejecuta el análisis de IA sobre la foto capturada manualmente.
         """
-        # 1. Validación
         if self.manual_frame_left is None or self.manual_frame_top is None:
-            QMessageBox.warning(self, "Error", "No hay fotos capturadas para analizar.")
+            QMessageBox.warning(self, "Captura Incompleta", "No se han detectado fotos en el búfer para analizar.")
             return
+        self.processing_lock = True
+        
+        if hasattr(self, 'btn_capture'):
+            self.btn_capture.setEnabled(False)
 
-        # 2. Feedback UI
+        if hasattr(self, 'btn_qr'):
+            self.btn_qr.setEnabled(False)
+
+        if hasattr(self, 'btn_manual_capture'):
+            self.btn_manual_capture.setEnabled(False)
+
+        if hasattr(self, 'btn_load_image'):
+            self.btn_load_image.setEnabled(False)
+
         self.btn_manual_ai_assist.setEnabled(False)
-        self.btn_manual_ai_assist.setText("⏳ IA Analizando...")
-        self.status_bar.set_status("🤖 BiometryService analizando captura", "info")
+        self.btn_manual_ai_assist.setText(" IA Analizando...")
+        icon_color = self.btn_manual_ai_assist.palette().buttonText().color()
+
+        self.btn_manual_ai_assist.setIcon(
+            qta.icon(
+                "fa5s.spinner",
+                color=icon_color,
+                animation=qta.Spin(self.btn_manual_ai_assist)
+            )
+        )
+
+        
+        self.status_bar.set_status("BiometryService procesando captura forense", "info")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
         try:
-            # 3. Instanciar servicio
             service = BiometryService(self.advanced_detector)
-
-            # 4. Ejecutar análisis 
             metrics, img_lat_ann, img_top_ann = service.analyze_and_annotate(
                 img_lat=self.manual_frame_left,
                 img_top=self.manual_frame_top,
@@ -2052,7 +2130,6 @@ class MainWindow(QMainWindow):
             )
 
             if metrics and metrics.get('length_cm', 0) > 0:
-                # 5. Construir resultado compatible
                 result_fake = {
                     'metrics': metrics,
                     'confidence': metrics.get('confidence', 0.95),
@@ -2064,28 +2141,30 @@ class MainWindow(QMainWindow):
                     'contour_top': True
                 }
 
-                # 6. Actualizar UI unificada
                 self.on_processing_complete(result_fake)
-
                 self.display_frame(img_lat_ann, self.lbl_manual_left)
                 self.display_frame(img_top_ann, self.lbl_manual_top)
 
-                self.status_bar.set_status("✅ Análisis de BiometryService completo", "success")
+                self.status_bar.set_status("Análisis de Biometría completado con éxito", "success")
             
             else:
-                self.status_bar.set_status("❌ La IA no detectó el pez claramente", "warning")
-                self._set_results_style("error")
-                self.results_text.setPlainText("❌ Error: No se pudo identificar la biometría en esta foto.\nIntente reubicar el pez o mejorar la iluminación.")
+                self.status_bar.set_status("IA: No se identificó el espécimen claramente", "warning")
+                self.results_text.setProperty("state", "error")
+                self.results_text.setPlainText("ERROR DE SEGMENTACIÓN: La IA no pudo aislar la silueta del pez.\n"
+                                               "Sugerencia: Mejore el contraste del fondo o centre el ejemplar.")
+                self._refresh_widget_style(self.results_text)
 
         except Exception as e:
-            logger.error(f"Error en run_ai_assist_manual: {e}.")
-            self.status_bar.set_status(f"❌ Error de IA: {str(e)}", "error")
-            self._set_results_style("error")
+            logger.error(f"Error crítico en run_ai_assist_manual: {e}.")
+            self.status_bar.set_status(f"Error de Motor IA: {str(e)}", "error")
+            self.results_text.setProperty("state", "error")
+            self._refresh_widget_style(self.results_text)
 
         finally:
             QApplication.restoreOverrideCursor()
             self.btn_manual_ai_assist.setEnabled(True)
-            self.btn_manual_ai_assist.setText("🤖 Asistente IA")
+            self.btn_manual_ai_assist.setText(" Asistente IA")
+            self.btn_manual_ai_assist.setIcon(qta.icon("fa5s.magic", color="white"))
             
     def generar_nombre_archivo(self, tipo, fish_id, L, H, W, P, fecha_str):
         """
@@ -2296,9 +2375,9 @@ class MainWindow(QMainWindow):
             self.refresh_daily_counter()
 
             if self.auto_capture_enabled:
-                self.status_bar.set_status(f"✅ Pez #{fish_id} guardado con éxito", "success")
+                self.status_bar.set_status(f"Pez #{fish_id} guardado con éxito", "success")
             else:
-                self.status_bar.set_status(f"✅ Pez #{fish_id} guardado con éxito", "success")
+                self.status_bar.set_status(f"Pez #{fish_id} guardado con éxito", "success")
                 message_parts = [
                     f"✅ Medición #{measurement_id} guardada correctamente\n",
                     f"🐟 Pez ID: {fish_id}\n",
@@ -2323,7 +2402,7 @@ class MainWindow(QMainWindow):
             if not self.auto_capture_enabled:
                 QMessageBox.critical(self, "❌ Error", f"No se pudo guardar la medición:\n\n{str(e)}")
             else:
-                self.status_bar.set_status(f"❌ Error al guardar: {str(e)}", "error")  
+                self.status_bar.set_status(f"Error al guardar: {str(e)}", "error")  
     
     def save_manual_measurement(self):
         """
@@ -2345,7 +2424,7 @@ class MainWindow(QMainWindow):
         
         if not fish_id:
             QMessageBox.warning(self, "⚠️ Campo Requerido", "Debe ingresar un ID para el pez.")
-            self.status_bar.set_status("⚠️ Falta ID del pez", "warning")
+            self.status_bar.set_status("Falta ID del pez", "warning")
             self.txt_manual_fish_id.setFocus()
             return
 
@@ -2453,7 +2532,7 @@ class MainWindow(QMainWindow):
         try:
             m_id = self.db.save_measurement(data)
             
-            self.status_bar.set_status(f"✅ Registro Manual #{m_id} guardado", "success")
+            self.status_bar.set_status(f"Registro Manual #{m_id} guardado", "success")
             
             # Éxito y Limpieza
             QMessageBox.information(self, "Guardado", f"Medición #{m_id} guardada con éxito.")
@@ -2465,7 +2544,7 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             logger.error(f"Error BD: {e}.")
-            self.status_bar.set_status("❌ Error de Base de Datos", "error")
+            self.status_bar.set_status("Error de Base de Datos", "error")
             QMessageBox.critical(self, "Error Base de Datos", f"No se pudo registrar en la BD:\n{e}")
             # Intentar borrar la imagen huérfana
             if os.path.exists(filepath): os.remove(filepath)
@@ -2592,7 +2671,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(100, self.refresh_daily_counter)
             
             if hasattr(self, 'status_bar'):
-                self.status_bar.set_status(f"✅ Auto-Guardado #{measurement_id}")
+                self.status_bar.set_status(f"Auto-Guardado #{measurement_id}")
             
             return True
             
@@ -2623,7 +2702,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error generando ID diario: {e}.")
             if hasattr(self, 'status_bar'):
-                self.status_bar.set_status("⚠️ Error al auto-generar ID", "warning")
+                self.status_bar.set_status("Error al auto-generar ID", "warning")
 
     def _reset_widget_state(self, widget):
         """Helper para limpiar estados visuales temporales"""
@@ -2986,7 +3065,7 @@ class MainWindow(QMainWindow):
         self.date_to.setDate(QDate.currentDate())
 
         if hasattr(self, 'status_bar'):
-            self.status_bar.set_status("🧹 Filtros reiniciados", "info")
+            self.status_bar.set_status("Filtros reiniciados", "info")
             
         self.reset_pagination_and_refresh()
 
@@ -3311,7 +3390,7 @@ class MainWindow(QMainWindow):
             try:
                 os.makedirs(path, exist_ok=True)
             except Exception as e:
-                self.status_bar.set_status("❌ Error al crear carpeta de salida", "error")
+                self.status_bar.set_status("Error al crear carpeta de salida", "error")
                 return
 
         try:
@@ -3323,7 +3402,7 @@ class MainWindow(QMainWindow):
                 subprocess.Popen(["xdg-open", path])
             
             if hasattr(self, 'status_bar'):
-                self.status_bar.set_status(f"📂 Carpeta abierta: {os.path.basename(path)}", "info")
+                self.status_bar.set_status(f"Carpeta abierta: {os.path.basename(path)}", "info")
                 
         except Exception as e:
             logger.error(f"Error abriendo carpeta de salida: {e}.")
@@ -3687,12 +3766,20 @@ class MainWindow(QMainWindow):
                 }.get(animations, "")
                 
                 self.status_bar.set_status(
-                    f"✨ Tema: {theme} | Densidad: {density} | {anim_status}", 
+                    f"Tema: {theme} | Densidad: {density} | {anim_status}", 
                     "info"
                 )
                 
         except Exception as e:
             logger.error(f"Error aplicando configuracion visual: {e}.")
+            
+    def get_icon(self, name: str, state: str = "normal", size: int = 14):
+        import qtawesome as qta
+        from PySide6.QtCore import QSize
+        
+        color = self.theme_colors.get(state, self.theme_colors["normal"])
+        return qta.icon(name, color=color)
+
 
     def toggle_theme(self, text, font_size=11, density="Normal"):
         """
@@ -3762,6 +3849,15 @@ class MainWindow(QMainWindow):
                 'border': border_div,
                 'val_color': c_success_base
             }
+            self._btn_text_colors = {
+    "primary": "#ffffff",
+    "success": "#ffffff",
+    "info": "#ffffff",
+    "warning": "#ffffff",
+    "secondary": c_sec_text
+}
+
+
         else:
             # ---------- MODO CLARO ----------
             c_primary_base, c_primary_hover = "#0077b6", "#005f8b"
@@ -3787,7 +3883,15 @@ class MainWindow(QMainWindow):
                 'border': border_div,
                 'val_color': c_success_base
             }
+            self._btn_text_colors = {
+    "primary": "#ffffff",
+    "success": "#ffffff",
+    "info": "#ffffff",
+    "warning": "#ffffff",
+    "secondary": c_sec_text
+}
 
+            
 
         # 4. CONSTRUCCIÓN DE LA HOJA DE ESTILO (CSS)
         custom_css = f"""
@@ -3867,26 +3971,55 @@ class MainWindow(QMainWindow):
                 font-family: "Segoe UI", sans-serif;
                 border: none;
             }}
+            QPushButton[class="primary"],
+QPushButton[class="success"],
+QPushButton[class="warning"],
+QPushButton[class="info"] {{
+    color: #ffffff;
+}}
+
 
             QPushButton[class="primary"] {{ background-color: {c_primary_base}; color: #ffffff; }}
             QPushButton[class="primary"]:hover {{ background-color: {c_primary_hover}; }}
+            QPushButton[class="primary"]:pressed {{ 
+    background-color: {c_primary_hover}; 
+}}
 
             QPushButton[class="success"] {{ background-color: {c_success_base}; color: #ffffff; }}
             QPushButton[class="success"]:hover {{ background-color: {c_success_hover}; }}
             QPushButton[class="success"]:checked {{background-color: {c_success_hover};}}
             QPushButton[class="success"]:checked:hover {{background-color: {c_success_base};}}
+            QPushButton[class="success"]:pressed {{ 
+    background-color: {c_success_hover}; 
+}}
 
             QPushButton[class="info"] {{ background-color: {c_info_base}; color: #ffffff; }}
             QPushButton[class="info"]:hover {{ background-color: {c_info_hover}; }}
+            QPushButton[class="info"]:pressed {{ 
+    background-color: {c_info_hover}; 
+}}
 
             QPushButton[class="warning"] {{ background-color: {c_warning_base}; color: #ffffff; }}
             QPushButton[class="warning"]:hover {{ background-color: {c_warning_hover}; }}
+            QPushButton[class="warning"]:pressed {{ 
+    background-color: {c_warning_hover}; 
+}}
 
             QPushButton[class="secondary"] {{background-color: {c_secondary_base}; color: {c_sec_text}; border: 1px solid {border_div};}}
             QPushButton[class="secondary"]:hover {{background-color: {c_secondary_hover}; color: {c_sec_text}; border: 1px solid {border_div};}}
+            QPushButton[class="secondary"]:pressed {{ 
+    background-color: {c_secondary_hover}; 
+}}
             
             QPushButton:disabled {{background-color: {c_disable_base}; color: {c_sec_text}; border: 1px solid {border_div};opacity: 0.6;}}
             QPushButton:disabled:hover {{background-color: {c_disable_hover};}}
+            QPushButton:disabled:pressed {{
+    background-color: {c_disable_base};
+}}
+        QMessageBox QPushButton {{
+    padding: 6px 12px;
+    min-width: 100px;
+}}
 
             /* --- ESTADOS DEL REPORTE DE RESULTADOS --- */
             
@@ -3921,23 +4054,59 @@ class MainWindow(QMainWindow):
 
 
             /* --- VISORES DE CÁMARA --- */
+            
+            /* 1. Estilos Base (Cuando hay video) */
             QLabel[class="video-feed"] {{
                 border: 2px solid {border_div};
                 background-color: #000000;
                 border-radius: 8px;
             }}
+            
+            /* Borde Sólido AZUL para Lateral (Video Activo) */
             QLabel[class="video-lateral"] {{
-                border: 3px solid {c_primary_base};
+                border: 3px solid {c_primary_base}; 
                 border-radius: 8px;
                 background-color: #000000;
             }}
+            
+            /* Borde Sólido VERDE para Cenital (Video Activo) */
             QLabel[class="video-cenital"] {{
                 border: 3px solid {c_success_base};
                 border-radius: 8px;
                 background-color: #000000;
             }}
-
             
+            /* 2. Estilos para "CÁMARA NO DISPONIBLE" */
+            
+            /* Base general para el texto y fondo */
+            QLabel[state="no-camera"] {{
+                background-color: {c_secondary_base};  /* Gris suave */
+                color: {c_sec_text};                   /* Texto secundario */
+                font-weight: bold;
+                font-size: {font_size + 2}px;
+                qproperty-alignment: AlignCenter;
+                border-radius: 8px;
+            }}
+
+            /* AQUI ESTA LA MAGIA: Bordes Punteados de Color */
+            
+            /* Si es Lateral y falla: Borde PUNTEADO AZUL */
+            QLabel[class="video-lateral"][state="no-camera"] {{
+                border: 2px dashed {c_primary_base}; 
+                color: {c_primary_base}; /* Texto también azulado para resaltar */
+            }}
+
+            /* Si es Cenital y falla: Borde PUNTEADO VERDE */
+            QLabel[class="video-cenital"][state="no-camera"] {{
+                border: 2px dashed {c_success_base};
+                color: {c_success_base}; /* Texto verdoso */
+            }}
+            
+            /* Si es otra cámara genérica: Borde Punteado Gris */
+            QLabel[class="video-feed"][state="no-camera"] {{
+                border: 2px dashed {c_disable_base};
+            }}
+
             /* --- NIVELES DE CONFIANZA (Semaforización) --- */
             QProgressBar[level="high"]::chunk {{
                 background-color: {c_high};
@@ -3998,6 +4167,22 @@ class MainWindow(QMainWindow):
                 font-weight: bold;
             }}
             
+            /* Estilos para el Label de Estabilidad en el Dashboard */
+            QLabel[state="neutral"] {{
+                color: {c_sec_text}; 
+                font-weight: normal; 
+            }}
+            QLabel[state="ok"] {{ 
+                color: {c_success_base}; 
+                font-weight: bold; 
+                border: 1px solid {c_success_base};
+                border-radius: 4px;
+                padding: 2px;
+            }}
+            QLabel[state="warn"] {{ 
+                color: {c_warning_base}; 
+                font-weight: bold; 
+            }}
             /* --- BADGES DE TIPO --- */
             QLabel[tipo="auto"] .badge {{ font-weight: bold; }}
             QLabel[tipo="manual"] .badge {{ font-style: italic; }}
@@ -4025,6 +4210,53 @@ class MainWindow(QMainWindow):
             QLabel[class="report-text"] {{
                 font-family: 'Consolas', 'Courier New', monospace;
             }}
+            
+            /* --- ESTILOS DE LA BARRA DE ESTADO INTEGRADOS --- */
+            #StatusBar {{
+                background-color: {bg_paper};
+                border-top: 1px solid {border_div};
+            }}
+            
+            #StatusBar QPushButton {{
+                background-color: transparent;
+                border: none;
+                text-align: left;
+                padding: 0px 5px;
+                font-family: 'Segoe UI', sans-serif;
+                font-size: 10pt;
+            }}
+            
+            #StatusBar QPushButton[interactive="true"] {{
+                border-radius: 6px;
+                padding: 2px 8px;
+            }}
+
+            #StatusBar QPushButton[interactive="true"]:hover {{
+                background-color: {item_hover};
+                border-radius: 6px;
+            }}
+
+            #StatusBar QPushButton[interactive="true"]:pressed {{
+    background-color: {c_primary_hover};
+    color: #ffffff;
+    padding-top: 3px;
+    padding-bottom: 1px;
+}}
+
+            /* Colores de TEXTO dinámicos según el estado (Usando tus variables) */
+            #StatusBar QPushButton[state="normal"]  {{ color: {text_col}; }}
+            #StatusBar QPushButton[state="dim"]     {{ color: {c_sec_text}; }}
+            #StatusBar QPushButton[state="info"]    {{ color: {c_info_base}; font-weight: bold; }}
+            #StatusBar QPushButton[state="success"] {{ color: {c_success_base}; font-weight: bold; }}
+            #StatusBar QPushButton[state="warning"] {{ color: {c_warning_base}; font-weight: bold; }}
+            #StatusBar QPushButton[state="error"]   {{ color: {c_error_base}; font-weight: bold; }}
+            #StatusBar QPushButton[state="accent"]  {{ color: {c_primary_base}; font-weight: bold; }}
+
+            /* Separador */
+            #StatusSeparator {{
+                background-color: {border_div}; 
+                margin: 8px 2px;
+            }}
         """
 
         # --- CAPA DE ALTO CONTRASTE ---
@@ -4038,6 +4270,20 @@ class MainWindow(QMainWindow):
                 QHeaderView::section { background-color: #ffffff; color: #000000; }
             """
 
+        current_palette = {
+            "normal":  text_col,
+            "dim":     c_sec_text,
+            "info":    c_info_base,
+            "success": c_success_base,
+            "warning": c_warning_base,
+            "error":   c_error_base,
+            "accent":  c_primary_base
+        }
+        
+        # Si tienes la barra instanciada, le actualizamos los iconos
+        if hasattr(self, 'status_bar'):
+             self.status_bar.update_theme_colors(current_palette)
+             
         # 5. APLICACIÓN FINAL
         app = QApplication.instance()
         app.setStyleSheet(
@@ -4045,7 +4291,7 @@ class MainWindow(QMainWindow):
             custom_css +
             high_contrast_css
         )
-        
+        self._refresh_button_icon(self.btn_auto_capture)
         self.update_report_html()
         
         for widget in self.findChildren(QWidget):
@@ -4467,7 +4713,7 @@ class MainWindow(QMainWindow):
             self.spin_scale_back_top.setValue(DEF_VALUES['BT'])
 
             self.apply_manual_calibration(silent=True)
-            self.status_bar.set_status("🔄 Valores de fábrica restaurados", "warning")
+            self.status_bar.set_status("Valores de fábrica restaurados", "warning")
 
     def apply_manual_calibration(self, silent=False):
         """Sincroniza las variables del motor de IA con los SpinBoxes de la UI"""
@@ -4491,13 +4737,13 @@ class MainWindow(QMainWindow):
             logger.info(msg)
             
             if not silent:
-                self.status_bar.set_status(f"✅ {msg}", "success")
+                self.status_bar.set_status(f"{msg}", "success")
 
             QTimer.singleShot(2000, lambda: self._clear_scales_highlight(widgets))
 
         except Exception as e:
             logger.error(f"Error aplicando calibracion: {e}.")
-            self.status_bar.set_status("❌ Error al aplicar escalas", "error")
+            self.status_bar.set_status("Error al aplicar escalas", "error")
 
     def _clear_scales_highlight(self, widgets):
         """Limpia el resalte de éxito de los campos de escala"""
@@ -4506,62 +4752,38 @@ class MainWindow(QMainWindow):
             w.style().unpolish(w)
             w.style().polish(w)
 
-    def create_no_camera_image(self, width, height):
-        """Genera un placeholder adaptable al tamaño del widget"""
+    def set_camera_placeholder(self, label):
+        """Configura el estado visual cuando no hay señal de video."""
+        if label is None: return
+
+        icon_color = getattr(self, 'c_sec_text', "#888888")
+        pixmap = qta.icon("fa5s.video-slash", color=icon_color).pixmap(64, 64)
         
-        # Imagen del tamaño real
-        img = np.zeros((height, width, 3), dtype=np.uint8)
-        img[:] = (35, 35, 35)
+        label.setPixmap(pixmap)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Texto principal
-        font = cv2.FONT_HERSHEY_SIMPLEX
+        label.setToolTip("CÁMARA NO DISPONIBLE\nVerifique conexión USB")
+
+        label.setProperty("state", "no-camera")
         
-        scale_main = min(width, height) / 600   # escala proporcional
-        thickness_main = max(2, int(scale_main * 3))
-
-        text_main = "CAMARA NO DISPONIBLE"
-        text_sub = "Verifique conexion USB"
-
-        # Centrar texto principal
-        (w_main, h_main), _ = cv2.getTextSize(text_main, font, scale_main, thickness_main)
-        x_main = (width - w_main) // 2
-        y_main = height // 2 - 20
-
-        cv2.putText(img, text_main, (x_main, y_main),
-                    font, scale_main, (255, 255, 255), thickness_main)
-
-        # Texto secundario
-        scale_sub = scale_main * 0.6
-        thickness_sub = max(1, int(scale_sub * 2))
-
-        (w_sub, h_sub), _ = cv2.getTextSize(text_sub, font, scale_sub, thickness_sub)
-        x_sub = (width - w_sub) // 2
-        y_sub = y_main + 40
-
-        cv2.putText(img, text_sub, (x_sub, y_sub),
-                    font, scale_sub, (180, 180, 180), thickness_sub)
-
-        return img
-
+        label.style().unpolish(label)
+        label.style().polish(label)
+        
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        
+        camera_map = {
+            self.lbl_left: getattr(self, "cap_left", None),
+            self.lbl_top: getattr(self, "cap_top", None),
+            self.lbl_manual_left: getattr(self, "cap_left", None),
+            self.lbl_manual_top: getattr(self, "cap_top", None)
+        }
 
-        labels = [
-            self.lbl_left,
-            self.lbl_top,
-            self.lbl_manual_left,
-            self.lbl_manual_top
-        ]
-
-        for lbl in labels:
-            if lbl is not None:
-                # Si no hay cámara activa en ese label
-                if not hasattr(self, "cap_left") or self.cap_left is None:
-                    img = self.create_no_camera_image(
-                        lbl.width(),
-                        lbl.height()
-                    )
-                    self.display_frame(img, lbl)
+        for label, cap_obj in camera_map.items():
+            if label is not None:
+                if cap_obj is None or (hasattr(cap_obj, 'isOpened') and not cap_obj.isOpened()):
+                    self.set_camera_placeholder(label)
+          
     def update_camera_dependent_buttons(self, enabled: bool):
         """
         Activa o desactiva botones que dependen de las cámaras
@@ -4592,26 +4814,16 @@ class MainWindow(QMainWindow):
 
                 QMessageBox.critical(self, "Error de Cámaras", error_msg)
 
-                labels = [
-                    self.lbl_left,
-                    self.lbl_top,
-                    self.lbl_manual_left,
-                    self.lbl_manual_top
-                ]
-
+                labels = [self.lbl_left, self.lbl_top, self.lbl_manual_left, self.lbl_manual_top]
                 for lbl in labels:
-                    no_cam_img = self.create_no_camera_image(
-                        lbl.width(),
-                        lbl.height()
-                    )
-                    self.display_frame(no_cam_img, lbl)
+                    self.set_camera_placeholder(lbl)
 
                 self.cameras_connected = False
                 self.update_camera_dependent_buttons(False)
 
                 self.status_bar.set_camera_status(False)
                 self.status_bar.set_status(
-                    "⚠️ Hardware de cámara no detectado",
+                    "Hardware de cámara no detectado",
                     "error"
                 )
 
@@ -4627,7 +4839,7 @@ class MainWindow(QMainWindow):
 
             self.status_bar.set_camera_status(True)
             self.status_bar.set_status(
-                "🚀 Sistema de visión activo",
+                "Sistema de visión activo",
                 "success"
             )
 
@@ -4643,26 +4855,16 @@ class MainWindow(QMainWindow):
 
             logger.error(f"Error al iniciar camaras: {str(e)}")
 
-            labels = [
-                self.lbl_left,
-                self.lbl_top,
-                self.lbl_manual_left,
-                self.lbl_manual_top
-            ]
-
+            labels = [self.lbl_left, self.lbl_top, self.lbl_manual_left, self.lbl_manual_top]
             for lbl in labels:
-                no_cam_img = self.create_no_camera_image(
-                    lbl.width(),
-                    lbl.height()
-                )
-                self.display_frame(no_cam_img, lbl)
+                self.set_camera_placeholder(lbl)
 
             self.cameras_connected = False
             self.update_camera_dependent_buttons(False)
 
             self.status_bar.set_camera_status(False)
             self.status_bar.set_status(
-                "❌ Error crítico de inicialización",
+                "Error crítico de inicialización",
                 "error"
             )
 
@@ -4672,7 +4874,7 @@ class MainWindow(QMainWindow):
         """Libera y reconecta los puertos USB de forma segura"""
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self.status_bar.set_status("🔄 Reiniciando puertos USB...", "info")
+        self.status_bar.set_status("Reiniciando puertos USB...", "info")
 
         try:
             # Detener timer si existe
@@ -4698,12 +4900,12 @@ class MainWindow(QMainWindow):
 
             if connected:
                 self.status_bar.set_status(
-                    "📷 Cámaras conectadas correctamente.",
+                    "Cámaras conectadas correctamente.",
                     "success"
                 )
             else:
                 self.status_bar.set_status(
-                    "❌ No se pudieron conectar las cámaras.",
+                    "No se pudieron conectar las cámaras.",
                     "error"
                 )
 
@@ -4804,6 +5006,21 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error en display_frame: {e}")  
             
+    def _refresh_button_icon(self, button):
+        """Regenera el icono del botón según el tema actual."""
+        
+        if not hasattr(button, "_icon_name"):
+            return
+        
+        btn_class = getattr(button, "_icon_class", "primary")
+        icon_name = button._icon_name
+        
+        icon_color = self._btn_text_colors.get(btn_class, "#ffffff")
+        
+        button.setIcon(qta.icon(icon_name, color=icon_color))
+        button.setIconSize(QSize(18, 18))
+
+            
     def update_cache(self):
         """Actualiza la caché de parámetros para el motor de visión"""
         self.cache_params['min_area'] = self.spin_min_area.value()
@@ -4824,30 +5041,59 @@ class MainWindow(QMainWindow):
         ]
     
     def toggle_auto_capture(self, checked):
-        """Activa/desactiva la captura automática con feedback visual de estado"""
+        """Activa/desactiva la captura automática con feedback visual e iconos sincronizados con el texto."""
+
         self.auto_capture_enabled = checked
-        
+
         if checked:
-            self.btn_auto_capture.setText("⏸️ Detener Auto-Captura")
-            self.btn_auto_capture.setProperty("class", "secondary")
-            self.status_bar.set_status("🚀 Detección IA activa: Buscando ejemplares...", "success")
+            btn_class = "success"
+            icon_name = "fa5s.stop"
+
+            self.btn_auto_capture.setText(" Detener Auto-Captura")
+            self.status_bar.set_status(
+                "Detección IA activa: Buscando ejemplares...",
+                "success"
+            )
             logger.info("Auto-captura habilitada.")
+
         else:
-            self.btn_auto_capture.setText("▶️ Iniciar Auto-Captura")
-            self.btn_auto_capture.setProperty("class", "secondary")
-            self.status_bar.set_status("⏸️ Monitoreo automático pausado", "warning")
-            
+            btn_class = "secondary"
+            icon_name = "fa5s.play"
+
+            self.btn_auto_capture.setText(" Iniciar Auto-Captura")
+            self.status_bar.set_status(
+                "Monitoreo automático pausado",
+                "warning"
+            )
             self.processing_lock = False
             logger.info("Auto-captura deshabilitada.")
-        
+
+        # Guardar metadatos correctos para refresco en cambio de tema
+        self.btn_auto_capture._icon_name = icon_name
+        self.btn_auto_capture._icon_class = btn_class
+
+        # Aplicar clase visual
+        self.btn_auto_capture.setProperty("class", btn_class)
+
+        # Obtener color según clase actual
+        icon_color = self._btn_text_colors.get(btn_class, "#ffffff")
+
+        # Generar icono con color correcto
+        self.btn_auto_capture.setIcon(
+            qta.icon(icon_name, color=icon_color)
+        )
+        self.btn_auto_capture.setIconSize(QSize(18, 18))
+
+        # Refrescar estilos
         self.btn_auto_capture.style().unpolish(self.btn_auto_capture)
         self.btn_auto_capture.style().polish(self.btn_auto_capture)
+        self.btn_auto_capture.update()
     
     def delete_selected_measurement(self):
         """Elimina de forma segura la medición seleccionada y su evidencia fotográfica"""
         selected_items = self.table_history.selectedItems()
         if not selected_items:
-            self.status_bar.set_status("⚠️ Seleccione una fila para eliminar", "warning")
+            self.status_bar.set_status("Seleccione una fila para eliminar", "warning")
             return
         
         row = self.table_history.currentRow()
@@ -4886,7 +5132,7 @@ class MainWindow(QMainWindow):
                     except OSError as e:
                         logger.warning(f"No se pudo borrar el archivo físico: {e}")
 
-                self.status_bar.set_status(f"🗑️ Medición {measurement_id} eliminada correctamente", "success")
+                self.status_bar.set_status(f"Medición {measurement_id} eliminada correctamente", "success")
                 self.refresh_history()
                 self.refresh_daily_counter()
             else:
@@ -4894,13 +5140,13 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             logger.error(f"Fallo crítico en proceso de eliminación: {e}")
-            self.status_bar.set_status("❌ Error al procesar la eliminación", "error")
+            self.status_bar.set_status("Error al procesar la eliminación", "error")
     
     def edit_selected_measurement(self):
         """Versión Blindada: Asegura que la ruta sea válida antes de abrir el editor."""
         selected_items = self.table_history.selectedItems()
         if not selected_items:
-            self.status_bar.set_status("⚠️ Seleccione una fila para editar", "warning")
+            self.status_bar.set_status("Seleccione una fila para editar", "warning")
             return
 
         row = self.table_history.currentRow()
@@ -4940,7 +5186,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             updated_data = dialog.get_updated_data()
             if self.db.update_measurement(measurement_id, updated_data):
-                self.status_bar.set_status(f"✅ Registro e imagen actualizados.", "success")
+                self.status_bar.set_status(f"Registro e imagen actualizados.", "success")
                 self.refresh_history()
             else:
                 QMessageBox.critical(self, "Error", "No se pudo actualizar la BD.")
@@ -4952,7 +5198,7 @@ class MainWindow(QMainWindow):
         # 1. Validación de selección
         selected = self.table_history.selectedItems()
         if not selected:
-            self.status_bar.set_status("⚠️ Seleccione una medición", "warning")
+            self.status_bar.set_status("Seleccione una medición", "warning")
             return
         
         row = self.table_history.currentRow()
@@ -4963,7 +5209,7 @@ class MainWindow(QMainWindow):
         # 2. Obtener datos de BD
         m_data = self.db.get_measurement_as_dict(m_id)
         if not m_data:
-            self.status_bar.set_status("❌ Error de lectura BD", "error")
+            self.status_bar.set_status("Error de lectura BD", "error")
             return
 
         # -------------------------------------------------------------
@@ -4978,7 +5224,7 @@ class MainWindow(QMainWindow):
         
         # CASO B: Ruta vacía o rota -> INICIAMOS BÚSQUEDA FORENSE
         else:
-            self.status_bar.set_status(f"🔍 Buscando imagen perdida para ID {m_id}...", "warning")
+            self.status_bar.set_status(f"Buscando imagen perdida para ID {m_id}...", "warning")
             
             # Usamos el Timestamp para hallar el archivo (es la huella digital única)
             # Formato en BD: "2026-02-11 18:30:00" -> Buscamos "20260211_183000"
@@ -5033,7 +5279,7 @@ class MainWindow(QMainWindow):
                    print(f"✅ Imagen recuperada y re-vinculada: {archivo_encontrado}")
                    # self.db.update_measurement_path(m_id, archivo_encontrado)
 
-                self.status_bar.set_status(f"🔍 Visualizando registro {m_id}", "info")
+                self.status_bar.set_status(f"Visualizando registro {m_id}", "info")
                 
                 dialog = ImageViewerDialog(
                     archivo_encontrado, # Usamos la ruta recuperada
@@ -5336,13 +5582,13 @@ class MainWindow(QMainWindow):
                 f"📊 Total de registros: {len(rows)}"
             )
             if hasattr(self, 'status_bar'):
-                self.status_bar.set_status(f"📊 CSV se ha generado en:\n{filename}", "success")
+                self.status_bar.set_status(f"CSV se ha generado en:\n{filename}", "success")
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error crítico al exportar:\n{e}")
             logger.error(f"Error CSV Directo: {e}", exc_info=True)
             if hasattr(self, 'status_bar'):
-                self.status_bar.set_status(f"❌ Error generando el CSV.", "error")
+                self.status_bar.set_status(f"Error generando el CSV.", "error")
         finally:
             if conn: 
                 conn.close()
@@ -5646,7 +5892,7 @@ class MainWindow(QMainWindow):
         self.generate_graphs()
         
         if hasattr(self, 'status_bar'):
-            self.status_bar.set_status(f"📊 Análisis de {len(measurements)} muestras completado", "success")
+            self.status_bar.set_status(f"Análisis de {len(measurements)} muestras completado", "success")
         
     def update_report_html(self):
         """Genera un reporte con diseño de Dashboard Corporativo"""
@@ -6017,7 +6263,7 @@ class MainWindow(QMainWindow):
             with open(Config.CONFIG_FILE, 'w') as f:
                 json.dump(config_data, f, indent=4)
             
-            self.status_bar.set_status("💾 Configuración guardada en disco y BD", "success")
+            self.status_bar.set_status("Configuración guardada en disco y BD", "success")
             QMessageBox.information(self, "Éxito", "Configuración y Calibración guardadas correctamente.")
         except Exception as e:
             logger.error(f"Error escribiendo config.json: {e}")
@@ -6125,7 +6371,7 @@ class MainWindow(QMainWindow):
             self.spin_val_min_top.setValue(self.hsv_top_v_min)
             self.spin_val_max_top.setValue(self.hsv_top_v_max)
 
-            self.status_bar.set_status("✅ Interfaz sincronizada con éxito", "success")
+            self.status_bar.set_status("Interfaz sincronizada con éxito", "success")
 
         except Exception as e:
             logger.error(f"Error sincronizando UI: {e}")
@@ -6293,7 +6539,7 @@ class MainWindow(QMainWindow):
                 target['s_max'] = 255
                 target['v_max'] = 255
                 
-                self.status_bar.set_status(f"🎯 Color capturado en {'Lateral' if is_lateral else 'Cenital'}", "info")
+                self.status_bar.set_status(f"Color capturado en {'Lateral' if is_lateral else 'Cenital'}", "info")
 
         lbl_left_raw.mousePressEvent = lambda e: capture_color(e, True)
         lbl_top_raw.mousePressEvent = lambda e: capture_color(e, False)
@@ -6378,11 +6624,131 @@ class MainWindow(QMainWindow):
             
             timer.stop()
             dialog.accept()
-            self.status_bar.set_status("✅ Calibración dual aplicada", "success")
+            self.status_bar.set_status("Calibración dual aplicada", "success")
 
         btns.addWidget(btn_reset)
         btns.addStretch()
         btns.addWidget(btn_save)
         layout.addLayout(btns)
 
-        dialog.exec()
+        dialog.exec()   
+        
+    def init_tray(self):
+        """Configura el icono en la barra de tareas (junto al reloj)."""
+        self.tray_icon = QSystemTrayIcon(self)
+        self.normal_icon = QIcon("logo.ico")
+        
+        # Usar el estilo global de la app para asegurar la carga del icono nativo
+        self.error_icon = QApplication.style().standardIcon(QStyle.SP_MessageBoxWarning) 
+        
+        self.is_alert_icon = False # Asegurar que la variable existe
+        self.tray_icon.setIcon(self.normal_icon)
+        self.tray_icon.show()
+        
+        # Menú del icono de bandeja
+        tray_menu = QMenu()
+        show_action = QAction("Abrir FishTrace", self)
+        quit_action = QAction("Cerrar Completamente", self)
+        
+        show_action.triggered.connect(self.showNormal)
+        quit_action.triggered.connect(self.force_quit)
+        
+        tray_menu.addAction(show_action)
+        tray_menu.addSeparator()
+        tray_menu.addAction(quit_action)
+        
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.show()
+        
+        self.tray_icon.activated.connect(self.on_tray_icon_activated)
+
+    def on_tray_icon_activated(self, reason):
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.showNormal()
+
+    def closeEvent(self, event):
+        """Intercepta el clic en la X y aplica el tema de FishTrace."""
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("FishTrace - Opciones de Salida")
+        msg_box.setText("¿Qué desea hacer con el sistema?")
+        # Agregamos un texto informativo para que el cuadro sea más ancho y no corte botones
+        msg_box.setInformativeText("La API y el monitoreo requieren seguir activos.")
+        
+        # Creamos los botones
+        btn_hide = msg_box.addButton("Seguir transmitiendo", QMessageBox.ActionRole)
+        btn_quit = msg_box.addButton("Cerrar completamente", QMessageBox.DestructiveRole)
+        btn_cancel = msg_box.addButton("Cancelar", QMessageBox.RejectRole)
+        
+        # --- ARREGLO DE ESTILO Y TAMAÑO ---
+        # 1. Forzamos un tamaño mínimo para que el texto no se amontone
+        msg_box.setStyleSheet(f"""
+            QLabel {{ min-width: 400px; color: {self.report_style['text']}; }}
+            QPushButton {{ 
+                padding: 8px 16px; 
+                font-weight: bold; 
+                border-radius: 4px; 
+                min-width: 120px;
+            }}
+        """)
+        
+        # 2. Aplicamos tus colores técnicos manualmente a cada botón
+        # Usamos los colores que ya definiste en toggle_theme
+        is_dark = self.is_currently_dark
+        bg_primary = "#00b4d8" if is_dark else "#0077b6"
+        bg_error = "#e74c3c"
+        
+        btn_hide.setStyleSheet(f"background-color: {bg_primary}; color: white; border: none;")
+        btn_quit.setStyleSheet(f"background-color: {bg_error}; color: white; border: none;")
+        # ----------------------------------
+
+        msg_box.exec()
+        
+        if msg_box.clickedButton() == btn_hide:
+            event.ignore()
+            self.hide()
+            self.tray_icon.showMessage(
+                "FishTrace Activo",
+                "El motor de IA sigue funcionando en segundo plano.",
+                QSystemTrayIcon.Information, 3000
+            )
+        elif msg_box.clickedButton() == btn_quit:
+            event.accept()
+        else:
+            event.ignore()
+
+    def force_quit(self):
+        """Cierre total desde el menú de la bandeja."""
+        self.api_service.stop()
+        QApplication.quit()
+        
+    def toggle_alert_icon(self):
+        """Alterna entre el logo normal y el icono de error."""
+        if self.is_alert_icon:
+            self.tray_icon.setIcon(self.normal_icon)
+        else:
+            self.tray_icon.setIcon(self.error_icon)
+        
+        self.is_alert_icon = not self.is_alert_icon
+          
+    def check_api_health_for_tray(self):
+        """Monitorea el estado y activa parpadeo si no hay conexión pública."""
+        is_ok = False
+        
+        if hasattr(self, 'api_service') and self.api_service:
+            # Obtenemos el estado real del servicio
+            _, state, url = self.api_service.get_status_info()
+            
+            # Consideramos 'Sano' solo si el estado es success y existe una URL de ngrok
+            if state == "success" and url is not None:
+                is_ok = True
+
+        # SI NO ESTÁ OK -> Iniciar parpadeo
+        if not is_ok:
+            if not self.alert_timer.isActive():
+                logger.warning("API Offline o sin Túnel. Iniciando parpadeo de alerta.")
+                self.alert_timer.start(600) # Velocidad del parpadeo
+        else:
+            # SI ESTÁ OK -> Detener parpadeo y restaurar logo
+            if self.alert_timer.isActive():
+                self.alert_timer.stop()
+                self.tray_icon.setIcon(self.normal_icon)

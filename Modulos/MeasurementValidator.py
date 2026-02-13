@@ -42,7 +42,7 @@ class MeasurementValidator:
             elif k_factor > Config.MAX_K_FACTOR:
                  errors.append(f"⚠️ Factor K excesivo ({k_factor:.2f}). Verifique si el largo se subestimo.")
         
-        # 3. Validar Consistencia Peso vs Longitud (Modelo Teórico)
+        # 3. Validar Consistencia Peso vs Longitud 
         if length > 0 and weight > 0:
             
             expected_weight = Config.WEIGHT_K * (length ** Config.WEIGHT_EXP)
@@ -62,7 +62,7 @@ class MeasurementValidator:
             if ratio_height > Config.MAX_HEIGHT_RATIO:
                 errors.append(f"⚠️ Altura anormal ({ratio_height:.2f}x largo). Posible pez doblado o error de camara.")
             elif ratio_height < Config.MIN_HEIGHT_RATIO:
-                errors.append(f"⚠️ Altura insuficiente ({ratio_height:.2f}x largo). ¿Deteccion parcial?")
+                errors.append(f"⚠️ Altura insuficiente ({ratio_height:.2f}x largo).")
 
             # B. Validación de Segmentación 
             if lat_area > 0 and height > 0:
@@ -78,9 +78,9 @@ class MeasurementValidator:
                 if bbox_top > 0:
                     occ_top = top_area / bbox_top
                     if occ_top > Config.MAX_TOP_OCCUPANCY_RATIO: 
-                        errors.append(f"⚠️ Cenital: Contorno rectangular ({occ_top:.2f}). ¿Es un ladrillo?")
+                        errors.append(f"⚠️ Cenital: Contorno rectangular ({occ_top:.2f}).")
                     elif occ_top < Config.MIN_TOP_OCCUPANCY_RATIO: 
-                        errors.append(f"⚠️ Cenital: Objeto muy delgado ({occ_top:.2f}). ¿Es un cable?")
+                        errors.append(f"⚠️ Cenital: Objeto muy delgado ({occ_top:.2f}).")
         
         if lat_area > 0 and top_area > 0:
             if top_area > (lat_area * Config.MAX_AREA_INVERSION_TOLERANCE):

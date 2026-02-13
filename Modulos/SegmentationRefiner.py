@@ -44,7 +44,7 @@ class SegmentationRefiner:
                 dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
                 self.model.predict(source=dummy_img, verbose=False)
         except Exception as e:
-            logger.error("Error critico cargando SAM", exc_info=True)
+            logger.error("Error critico cargando SAM.", exc_info=True)
             self.model = None
 
     def get_body_mask(self, image_bgr: np.ndarray, box: List[int]) -> Optional[np.ndarray]:
@@ -104,7 +104,7 @@ class SegmentationRefiner:
             return body_mask_refined
 
         except Exception as e:
-            logger.error("Error en pipeline de segmentación SAM", exc_info=True)
+            logger.error("Error en pipeline de segmentación SAM.", exc_info=True)
             return None
 
     def _keep_largest_blob(self, mask: np.ndarray) -> Optional[np.ndarray]:
@@ -145,4 +145,4 @@ class SegmentationRefiner:
                 torch.cuda.empty_cache()
                 gc.collect()
         except Exception as e:
-            logger.debug("Error liberando recursos SAM", exc_info=True)
+            logger.error("Error liberando recursos SAM.", exc_info=True)

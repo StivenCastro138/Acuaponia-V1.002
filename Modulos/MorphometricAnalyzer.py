@@ -23,7 +23,6 @@ class MorphometricAnalyzer:
     """
 
     @staticmethod
-    @staticmethod
     def compute_advanced_metrics(
         contour_lat: Optional[np.ndarray], 
         contour_top: Optional[np.ndarray], 
@@ -120,9 +119,7 @@ class MorphometricAnalyzer:
         else:
             w_cm = h_cm * Config.DEFAULT_WIDTH_RATIO
 
-        # Pitágoras para la caja: corregimos si el pez no está paralelo
         l_real_cm = math.sqrt(l_lat_cm**2 + (delta_z_cm * 0.1)**2) if delta_z_cm > 0 else l_lat_cm
-
         l_real_cm, h_cm, w_cm = MorphometricAnalyzer._apply_biological_constraints(l_real_cm, h_cm, w_cm)
         
         metrics = {

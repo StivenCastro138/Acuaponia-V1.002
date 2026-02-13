@@ -34,7 +34,7 @@ class SpineMeasurer:
         # 2. Esqueletización y primer recorte
         try:
             skeleton = cv2.ximgproc.thinning(binary, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN)
-            skeleton = cv2.bitwise_and(skeleton, binary) # Candado 1
+            skeleton = cv2.bitwise_and(skeleton, binary) 
         except Exception as e:
             logger.error(f"Error en esqueletizacion: {e}")
             return 0.0, None
@@ -44,8 +44,7 @@ class SpineMeasurer:
         if ordered_points_yx is None:
             return 0.0, skeleton
 
-        # 4. Medición Sub-píxel con DIBUJO PROTEGIDO
-        # Ahora devolvemos la visualización de la curva ya recortada
+        # 4. Medición Sub-píxel 
         length_px, visualization = SpineMeasurer._calculate_spline_and_visualize(ordered_points_yx, binary)
         
         return length_px, visualization
@@ -57,39 +56,52 @@ class SpineMeasurer:
         """
         h, w = mask_limit.shape
         curve_viz = np.zeros((h, w), dtype=np.uint8)
-        
+
         if len(points_yx) < 5:
-            # Si hay pocos puntos, dibujar líneas rectas simples
             for i in range(len(points_yx)-1):
                 p1 = (int(points_yx[i][1]), int(points_yx[i][0]))
                 p2 = (int(points_yx[i+1][1]), int(points_yx[i+1][0]))
                 cv2.line(curve_viz, p1, p2, 255, 1)
+            
             final_viz = cv2.bitwise_and(curve_viz, mask_limit)
             return float(cv2.countNonZero(final_viz)), final_viz
 
         try:
-            y, x = points_yx[:, 0], points_yx[:, 1]
-            tck, u = splprep([y, x], s=0.05, k=3) 
-            u_fine = np.linspace(0, 1, len(x) * 15) 
+            unique_points = []
+            prev = None
+            for pt in points_yx:
+                if prev is None or not np.array_equal(pt, prev):
+                    unique_points.append(pt)
+                    prev = pt
+            
+            points_yx_clean = np.array(unique_points)
+            
+            if len(points_yx_clean) < 4:
+                raise ValueError("Puntos insuficientes tras limpieza")
+
+            y, x = points_yx_clean[:, 0], points_yx_clean[:, 1]
+            
+            smooth_factor = len(x) * 0.5
+            tck, u = splprep([y, x], s=smooth_factor, k=3) 
+            
+            u_fine = np.linspace(0, 1, len(x) * 10) 
             new_points = splev(u_fine, tck)
             v_y, v_x = new_points[0], new_points[1]
 
-            # Dibujamos el spline en un lienzo temporal
-            for i in range(len(v_x) - 1):
-                p1 = (int(v_x[i]), int(v_y[i]))
-                p2 = (int(v_x[i+1]), int(v_y[i+1]))
-                # Verificación de bordes de imagen
-                if (0 <= p1[1] < h and 0 <= p1[0] < w and 0 <= p2[1] < h and 0 <= p2[0] < w):
-                    cv2.line(curve_viz, p1, p2, 255, 1)
+            pts = np.vstack((v_x, v_y)).astype(np.int32).T
+            
+            pts[:, 0] = np.clip(pts[:, 0], 0, w - 1)
+            pts[:, 1] = np.clip(pts[:, 1], 0, h - 1)
 
-            # EL SEGURO FINAL: Bitwise AND con la máscara
-            # Esto borra cualquier píxel rojo que la matemática haya tirado fuera del pez
-            guaranteed_spine = cv2.bitwise_and(curve_canvas := curve_viz, mask_limit)
+            cv2.polylines(curve_viz, [pts], isClosed=False, color=255, thickness=1)
+
+            guaranteed_spine = cv2.bitwise_and(curve_viz, mask_limit)
             
             return float(cv2.countNonZero(guaranteed_spine)), guaranteed_spine
 
-        except Exception:
-            return 0.0, mask_limit # Fallback
+        except Exception as e:
+            
+            return 0.0, mask_limit
         
     @staticmethod
     def _get_longest_path_graph(skeleton: np.ndarray) -> Optional[np.ndarray]:

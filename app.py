@@ -12,19 +12,17 @@ from PySide6.QtWidgets import QApplication
 
 from Config.Config import Config
 from Modulos.MainWindow import MainWindow
+from Modulos.ApiService import ApiService
 
 logger = logging.getLogger(__name__)
 os.environ["OPENCV_VIDEOIO_DEBUG"] = "0"
-# ============================================================================
-# PROCEDIMIENTO PRINCIPAL (MAIN)
-# ============================================================================
+
 def main():
     """
     Inicializa los directorios del sistema, configura el estilo de la 
     aplicación y lanza la ventana principal.
     """
     
-    # 1. Creación de la estructura de carpetas necesaria para la persistencia de datos
     folders = [
         Config.OUT_DIR, 
         Config.IMAGES_AUTO_DIR, 
@@ -36,21 +34,21 @@ def main():
     
     for folder in folders:
         os.makedirs(folder, exist_ok=True)
+        
+    api_service = ApiService(port=5001)
+    api_service.start() 
+    logger.info(f"Servicio API iniciado. Tunnel: {api_service.get_public_url()}.")
     
-    # 2. Inicialización de la aplicación
     app = QApplication([])
     app.setStyle('Fusion')
     
-    # 3. Lanzamiento de la interfaz de usuario
-    window = MainWindow()
+    window = MainWindow(api_service=api_service)
     window.show()
     
     logger.info("Sistema FishTrace iniciado correctamente.")
     
-    # 4. Ciclo de eventos de la aplicación
     exit_code = app.exec()
     
-    # 5. Limpieza de recursos al cerrar
     cv2.destroyAllWindows()
     return exit_code
 

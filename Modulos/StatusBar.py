@@ -11,7 +11,8 @@ import os
 import psutil
 import logging
 from typing import Optional, Final, Dict, Any
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame, QPushButton, QApplication
+import qtawesome as qta  
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QFrame, QPushButton, QApplication
 from PySide6.QtCore import Slot, QTimer, Qt
 from PySide6.QtGui import QCloseEvent
 
@@ -49,6 +50,7 @@ class StatusBar(QWidget):
         self._process: psutil.Process = psutil.Process(os.getpid())
         self._gpu_handle: Any = None
         self._nvml_initialized: bool = False
+        self.theme_colors: Dict[str, str] = {} 
         
         psutil.cpu_percent(interval=None) 
 
@@ -67,7 +69,7 @@ class StatusBar(QWidget):
                 self._gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
                 self._nvml_initialized = True
             except Exception as e:
-                logger.info(f"NVML no disponible: {e}")
+                logger.info(f"NVML no disponible: {e}.")
                 self._gpu_handle = None
 
     def init_ui(self) -> None:
@@ -77,44 +79,42 @@ class StatusBar(QWidget):
         self.setObjectName("StatusBar")
         
         # 1. Estado Global
-        self.lbl_status = self._create_label("● Iniciando...", self.HELP_TEXTS["status"], "info")
-        self.layout_main.addWidget(self.lbl_status)
-        self.layout_main.addStretch()
+        self.btn_status = self._create_metric("Iniciando...", "fa5s.info-circle", self.HELP_TEXTS["status"], "info")
+        self.layout_main.addWidget(self.btn_status)
+        self.layout_main.addStretch() 
         
-        self.btn_api = QPushButton("🌐 API: --")
-        self.btn_api.setObjectName("ApiStatusButton")
-        self.btn_api.setToolTip(self.HELP_TEXTS["api"])
-        self.btn_api.setFlat(True)
+        # API 
+        self.btn_api = self._create_metric("API: --", "fa5s.globe", self.HELP_TEXTS["api"], "dim")
+        self.btn_api.setProperty("interactive", True)
         self.btn_api.setCursor(Qt.PointingHandCursor)
-        self.btn_api.setProperty("state", "dim")
         self.btn_api.clicked.connect(self._on_api_clicked)
 
         # 2. Telemetría
-        self.lbl_ia_time = self._create_label("IA: -- ms", self.HELP_TEXTS["ia"], "info")
-        self.lbl_fps = self._create_label("FPS: 0.0", self.HELP_TEXTS["fps"], "normal")
+        self.btn_ia = self._create_metric("IA: -- ms", "fa5s.microchip", self.HELP_TEXTS["ia"], "info")
+        self.btn_fps = self._create_metric("FPS: 0.0", "fa5s.film", self.HELP_TEXTS["fps"], "normal")
         
         # CPU / RAM
-        self.lbl_cpu = self._create_label("CPU: 0%", self.HELP_TEXTS["cpu"], "dim")
-        self.lbl_ram = self._create_label("RAM: -- MB", self.HELP_TEXTS["ram"], "dim")
+        self.btn_cpu = self._create_metric("CPU: 0%", "fa5s.server", self.HELP_TEXTS["cpu"], "dim")
+        self.btn_ram = self._create_metric("RAM: -- MB", "fa5s.memory", self.HELP_TEXTS["ram"], "dim")
         
         # GPU 
-        self.lbl_gpu_load = self._create_label("GPU: 0%", self.HELP_TEXTS["gpu"], "accent") 
-        self.lbl_vram = self._create_label("VRAM: -- MB", self.HELP_TEXTS["vram"], "accent")
+        self.btn_gpu = self._create_metric("GPU: 0%", "fa5s.layer-group", self.HELP_TEXTS["gpu"], "accent") 
+        self.btn_vram = self._create_metric("VRAM: -- MB", "fa5s.hdd", self.HELP_TEXTS["vram"], "accent")
         
-        self.lbl_measurements = self._create_label("Hoy: 0", self.HELP_TEXTS["measurements"], "warning")
-        self.lbl_cameras = self._create_label("📹 --", self.HELP_TEXTS["cameras"], "normal")
+        # Sensores
+        self.btn_measurements = self._create_metric("Hoy: 0", "fa5s.ruler-horizontal", self.HELP_TEXTS["measurements"], "warning")
+        self.btn_cameras = self._create_metric("--", "fa5s.video", self.HELP_TEXTS["cameras"], "normal")
 
-        # Agregamos widgets 
         widgets_telemetry = [
-            self.lbl_ia_time, self.lbl_fps, 
-            self.lbl_cpu, self.lbl_ram,   
-            self.lbl_gpu_load, self.lbl_vram,
-            self.lbl_measurements, self.lbl_cameras,
+            self.btn_ia, self.btn_fps, 
+            self.btn_cpu, self.btn_ram,   
+            self.btn_gpu, self.btn_vram,
+            self.btn_measurements, self.btn_cameras,
             self.btn_api
         ]
 
         for i, w in enumerate(widgets_telemetry):
-            if (w == self.lbl_vram or w == self.lbl_gpu_load) and not self._gpu_handle:
+            if (w == self.btn_vram or w == self.btn_gpu) and not self._gpu_handle:
                 w.hide()
             else:
                 self.layout_main.addWidget(w)
@@ -124,39 +124,70 @@ class StatusBar(QWidget):
                      line.setObjectName("StatusSeparator") 
                      self.layout_main.addWidget(line)
 
-    def _create_label(self, text: str, tooltip: str, state_type: str) -> QLabel:
-        """Crea labels usando Propiedades Dinámicas"""
-        lbl = QLabel(text)
-        lbl.setToolTip(tooltip)
-        lbl.setProperty("state", state_type) 
-        return lbl
+    def _create_metric(self, text: str, icon_name: str, tooltip: str, initial_state: str) -> QPushButton:
+        """Crea un botón plano configurado para parecer una etiqueta con icono"""
+        btn = QPushButton(text)
+        btn.setToolTip(tooltip)
+        btn.setFlat(True) 
+        
+        btn.setProperty("icon_name", icon_name)
+        btn.setProperty("state", initial_state)
+        
+        return btn
+
+    def update_theme_colors(self, palette: Dict[str, str]):
+        """
+        Actualiza el diccionario de colores y repinta todos los iconos.
+        """
+        self.theme_colors = palette
+        for btn in self.findChildren(QPushButton):
+            self._refresh_icon_color(btn)
+
+    def _refresh_icon_color(self, btn: QPushButton):
+        """Genera el icono nuevamente con el color correcto según el estado actual"""
+        state = btn.property("state")
+        icon_name = btn.property("icon_name")
+        
+        if not icon_name: return
+
+        hex_color = self.theme_colors.get(state, "#7f8c8d")
+        
+        btn.setIcon(qta.icon(icon_name, color=hex_color))
+
+    def _update_btn_state(self, btn: QPushButton, new_state: str):
+        """Cambia el estado lógico, actualiza el estilo CSS y el color del icono"""
+        if btn.property("state") != new_state:
+            btn.setProperty("state", new_state)
+            
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+            
+            self._refresh_icon_color(btn)
 
     @Slot(str, str)
     def set_status(self, message: str, state: str = "info"):
-        clean_message = message.lstrip("● ")
-        self.lbl_status.setText(f"● {clean_message}")
-        self._update_label_state(self.lbl_status, state)
+        clean = message.lstrip("● ") 
+        self.btn_status.setText(clean)
+        self._update_btn_state(self.btn_status, state)
 
     @Slot(float)
     def set_ia_time(self, ms: float):
-        self.lbl_ia_time.setText(f"IA: {ms:.1f}ms")
-        if ms > 3000:
-            self._update_label_state(self.lbl_ia_time, "error") 
-        else:
-            self._update_label_state(self.lbl_ia_time, "info")  
+        self.btn_ia.setText(f"IA: {ms:.1f}ms")
+        state = "error" if ms > 3000 else "info"
+        self._update_btn_state(self.btn_ia, state)
 
     @Slot(int)
     def set_measurement_count(self, count: int):
-        self.lbl_measurements.setText(f"Hoy: {count}")
+        self.btn_measurements.setText(f"Hoy: {count}")
 
     @Slot(bool)
     def set_camera_status(self, ok: bool):
         if ok:
-            self.lbl_cameras.setText("📹 OK")
-            self._update_label_state(self.lbl_cameras, "success") 
+            self.btn_cameras.setText("OK")
+            self._update_btn_state(self.btn_cameras, "success") 
         else:
-            self.lbl_cameras.setText("📹 ERR")
-            self._update_label_state(self.lbl_cameras, "error")  
+            self.btn_cameras.setText("ERROR")
+            self._update_btn_state(self.btn_cameras, "error")   
 
     @Slot(float)
     def update_system_info(self, fps: Optional[float] = None):
@@ -164,11 +195,9 @@ class StatusBar(QWidget):
         
         # 1. Actualizar FPS
         if fps is not None:
-            self.lbl_fps.setText(f"FPS: {fps:.1f}")
-            if fps < 15.0:
-                self._update_label_state(self.lbl_fps, "error")
-            else:
-                self._update_label_state(self.lbl_fps, "normal") 
+            self.btn_fps.setText(f"FPS: {fps:.1f}")
+            state = "error" if fps < 15.0 else "normal"
+            self._update_btn_state(self.btn_fps, state)
 
         # 2. Refresco Hardware
         if current_time - self._last_hw_update >= self.UPDATE_INTERVAL_HW:
@@ -178,79 +207,49 @@ class StatusBar(QWidget):
             
     @Slot(str, str, str)
     def update_api_status(self, text: str, state: str, url: Optional[str]):
-        """Actualiza el botón de la API desde MainWindow"""
-        self.btn_api.setText(f"🌐 API: {text}")
+        self.btn_api.setText(f"API: {text}")
         self._current_api_url = url
-        self._update_label_state(self.btn_api, state)
+        self._update_btn_state(self.btn_api, state)
 
     def _on_api_clicked(self):
-        """Copia la URL al portapapeles y avisa en el status"""
-        # Intentamos obtener la URL que guardamos en el último refresco
         url_to_copy = getattr(self, "_current_api_url", None)
-        
         if url_to_copy:
-            # Verificamos si es la de localhost para avisar al usuario
             if "localhost" in url_to_copy:
-                self.set_status("⚠️ La URL global aún está cargando. Copiada local.", "warning")
+                 self.set_status("URL Local copiada", "warning")
             else:
-                self.set_status("✅ URL Global (Ngrok) copiada con éxito", "success")
-                
+                 self.set_status("URL Global copiada", "success")
             QApplication.clipboard().setText(url_to_copy)
         else:
-            self.set_status("❌ API no disponible para copiar", "error")
+            self.set_status("API no disponible", "error")
             
     def _update_cpu_stats(self) -> None:
         try:
-            # CPU 
-            cpu_percent = psutil.cpu_percent(interval=None) 
-            self.lbl_cpu.setText(f"CPU: {int(cpu_percent)}%")
+            cpu = psutil.cpu_percent(interval=None) 
+            self.btn_cpu.setText(f"CPU: {int(cpu)}%")
             
-            if cpu_percent > 85:
-                self._update_label_state(self.lbl_cpu, "error")
-            elif cpu_percent > 60:
-                self._update_label_state(self.lbl_cpu, "warning")
-            else:
-                self._update_label_state(self.lbl_cpu, "dim") 
+            if cpu > 85: self._update_btn_state(self.btn_cpu, "error")
+            elif cpu > 60: self._update_btn_state(self.btn_cpu, "warning")
+            else: self._update_btn_state(self.btn_cpu, "dim")
 
-            # RAM 
-            mem_info = self._process.memory_info()
-            mem_mb = mem_info.rss / 1024**2
-            self.lbl_ram.setText(f"RAM: {int(mem_mb)}MB")
-        except Exception as e:
-            logger.debug(f"Error CPU stats: {e}", exc_info=True)
+            mem = self._process.memory_info().rss / 1024**2
+            self.btn_ram.setText(f"RAM: {int(mem)}MB")
+        except: pass
 
     def _update_gpu_stats(self) -> None:
-        if not self._gpu_handle:
-            return
-            
+        if not self._gpu_handle: return
         try:
-            utilization = pynvml.nvmlDeviceGetUtilizationRates(self._gpu_handle)
-            gpu_load = utilization.gpu
+            util = pynvml.nvmlDeviceGetUtilizationRates(self._gpu_handle)
+            self.btn_gpu.setText(f"GPU: {util.gpu}%")
             
-            self.lbl_gpu_load.setText(f"GPU: {gpu_load}%")
-            
-            if gpu_load > 90:
-                self._update_label_state(self.lbl_gpu_load, "warning")
-            else:
-                self._update_label_state(self.lbl_gpu_load, "accent") 
+            if util.gpu > 90: self._update_btn_state(self.btn_gpu, "warning")
+            else: self._update_btn_state(self.btn_gpu, "accent")
 
-            # VRAM
-            info = pynvml.nvmlDeviceGetMemoryInfo(self._gpu_handle)
-            vram_mb = info.used / 1024**2
-            self.lbl_vram.setText(f"VRAM: {int(vram_mb)}MB")
-            
-        except Exception as e:
-            logger.debug(f"Error GPU Stats: {e}", exc_info=True)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(self._gpu_handle).used / 1024**2
+            self.btn_vram.setText(f"VRAM: {int(mem)}MB")
+        except: pass
 
     def closeEvent(self, event: QCloseEvent):
         if self._nvml_initialized:
-            try:
-                pynvml.nvmlShutdown()
+            try: pynvml.nvmlShutdown()
             except: pass
         event.accept()
-
-    def _update_label_state(self, label: QLabel, new_state: str):
-        if label.property("state") != new_state:
-            label.setProperty("state", new_state)
-            label.style().unpolish(label)
-            label.style().polish(label)

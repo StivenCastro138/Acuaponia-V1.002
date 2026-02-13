@@ -15,7 +15,7 @@ from datetime import datetime
 from functools import wraps
 from flask import Flask, jsonify, request
 from flask_cors import CORS  
-from pyngrok import ngrok
+from pyngrok import ngrok, conf
 
 from Config.Config import Config
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 class ApiService:
-    def __init__(self, port=5000):
+    def __init__(self, port=5001):
         self.ngrok_token = Config.NGROK_AUTHTOKEN.strip() if Config.NGROK_AUTHTOKEN else None
         self.port = port
         self.app = Flask(__name__)
@@ -296,7 +296,7 @@ class ApiService:
     def start(self):
         """Inicia el servidor Flask y abre el túnel público Ngrok."""
         if self.running:
-            logger.warning("El servicio ya está en ejecución")
+            logger.warning("El servicio ya esta en ejecucion.")
             return
 
         self.running = True
@@ -308,35 +308,53 @@ class ApiService:
             name="FlaskThread"
         )
         self.server_thread.start()
-
-        # Esperar a que Flask inicie
-        time.sleep(2)
+        time.sleep(1.5)
 
         # Configurar túnel Ngrok
         try:
             # Cerrar túneles previos
             ngrok.kill()
-
-            # Configurar token correctamente
+            conf.get_default().request_timeout = 30
+            
             if self.ngrok_token:
                 ngrok.set_auth_token(self.ngrok_token)
-                logger.info("Authtoken de ngrok configurado correctamente")
+                logger.info("Authtoken de ngrok configurado correctamente.")
             else:
-                logger.warning("NGROK_AUTHTOKEN no definido en Config")
-                raise ValueError("Token de ngrok no configurado")
+                logger.warning("NGROK_AUTHTOKEN no definido en Config.")
+                raise ValueError("Token de ngrok no configurado.")
 
             # Crear túnel HTTP
             tunnel = ngrok.connect(
                 addr=self.port,
-                proto="http"
+                proto="http",
+                bind_tls=True
             )
 
             self.public_url = tunnel.public_url
-            logger.info(f"API pública disponible en: {self.public_url}")
+            logger.info(f"API publica disponible en: {self.public_url}.")
 
         except Exception as e:
-            logger.error(f"Error al configurar Ngrok: {e}")
+            logger.error(f"Error al configurar Ngrok: {e}.")
             self.public_url = None
+        
+        if not hasattr(self, 'watchdog_thread') or not self.watchdog_thread.is_alive():
+            self.watchdog_thread = threading.Thread(target=self._monitor_tunnel, daemon=True)
+            self.watchdog_thread.start()
+
+    def _monitor_tunnel(self):
+        """Revisa cada 5 minutos si el túnel sigue vivo."""
+        while self.running:
+            time.sleep(300) 
+            if self.public_url:
+                try:
+
+                    tunnels = ngrok.get_tunnels()
+                    if not tunnels:
+                        logger.warning("Túnel perdido. Intentando reconexión automática...")
+                        self.public_url = None
+                        self.start() 
+                except Exception as e:
+                    logger.error(f"Error monitoreando túnel: {e}")
 
     def _run_server(self):
         """Ejecuta el servidor Flask."""

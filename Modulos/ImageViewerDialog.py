@@ -511,7 +511,6 @@ class ImageViewerDialog(QDialog):
         old_path = self.image_path_combined
         m_info = self.measurement_info
         
-        # Recuperar tipo y fecha originales para no perder el rastro
         tipo_orig = m_info.get('measurement_type', 'AUTO')
         fecha_orig = m_info.get('timestamp')
         fish_id = m_info.get('fish_id')
@@ -536,14 +535,12 @@ class ImageViewerDialog(QDialog):
             'measurement_type': 'ia_refined'
         }
         
-        # Crear copia de datos actuales y actualizar con los nuevos
         full_data_to_save = self.measurement_info.copy()
         full_data_to_save.update(new_values)
 
         new_path = old_path 
         main_app = self._find_main_window()
         
-        # Variable para guardar la imagen actualizada en memoria
         imagen_actualizada_para_visor = None
         if os.path.exists(old_path) and main_app:
             try:
@@ -575,7 +572,7 @@ class ImageViewerDialog(QDialog):
                     
                     # D. DIBUJAR NUEVO OVERLAY
                     img_upd = main_app.draw_fish_overlay(img, payload_vis)
-                    imagen_actualizada_para_visor = img_upd # Guardamos referencia
+                    imagen_actualizada_para_visor = img_upd 
                     
                     # E. Guardar en disco
                     is_success, im_buf = cv2.imencode(".jpg", img_upd)
@@ -597,7 +594,6 @@ class ImageViewerDialog(QDialog):
         # 4. GUARDAR EN BASE DE DATOS
         if self.db_manager.update_measurement(m_id, full_data_to_save):
             
-            # Actualizar info en memoria
             self.measurement_info.update(new_values)
             self.measurement_info['image_path'] = new_path
             
@@ -606,25 +602,18 @@ class ImageViewerDialog(QDialog):
                 
             self.setup_info_label() 
 
-            # ---------------------------------------------------------
-            # 5. ACTUALIZACIÓN VISUAL EN PANTALLA (REFRESCO INMEDIATO)
-            # ---------------------------------------------------------
             if imagen_actualizada_para_visor is not None:
-                # Actualizamos la imagen "original" en la memoria del objeto
                 self.original_image = imagen_actualizada_para_visor
                 
                 if self.is_dual_format:
-                    # Si es formato doble, recortamos de nuevo
                     h, w, _ = self.original_image.shape
                     mid = w // 2
                     self.image_lateral = self.original_image[:, :mid]
                     self.image_top = self.original_image[:, mid:]
                     
-                    # Y redibujamos en los labels existentes
                     self.display_image(self.image_lateral, self.label_lateral)
                     self.display_image(self.image_top, self.label_top)
                 else:
-                    # Si es formato simple
                     self.display_image(self.original_image, self.label_full)
 
             QMessageBox.information(self, "Éxito", "Registro actualizado y visualización refrescada.")
@@ -634,7 +623,6 @@ class ImageViewerDialog(QDialog):
             
     def _find_main_window(self):
         """Busca recursivamente hacia arriba hasta encontrar la MainWindow con las funciones necesarias."""
-        # CORRECCIÓN: Usamos self.parent() porque self.main_window no existe aquí
         curr = self.parent() 
         while curr:
             if hasattr(curr, 'draw_fish_overlay') and hasattr(curr, 'generar_nombre_archivo'):
