@@ -760,6 +760,7 @@ class MainWindow(QMainWindow):
 
         try:
             # Tiempos ajustados para feedback del usuario
+            QTimer.singleShot(100, self.save_sound.play)
             QTimer.singleShot(17100, self.save_sound.play) # Sonido inmediato
             QTimer.singleShot(17000, self._save_measurement_silent)
             QTimer.singleShot(20000, self.unlock_after_save)
