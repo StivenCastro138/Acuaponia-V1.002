@@ -760,9 +760,9 @@ class MainWindow(QMainWindow):
 
         try:
             # Tiempos ajustados para feedback del usuario
-            QTimer.singleShot(100, self.save_sound.play) # Sonido inmediato
-            QTimer.singleShot(1500, self._save_measurement_silent)
-            QTimer.singleShot(5000, self.unlock_after_save)
+            QTimer.singleShot(17100, self.save_sound.play) # Sonido inmediato
+            QTimer.singleShot(17000, self._save_measurement_silent)
+            QTimer.singleShot(20000, self.unlock_after_save)
         except Exception as e:
             logger.error(f"Error en auto-guardado: {e}")
             self.processing_lock = False
@@ -2594,6 +2594,7 @@ class MainWindow(QMainWindow):
     def _save_measurement_silent(self):
         """
         Versión silenciosa de guardado BLINDADA y con DIBUJO DE CONTORNOS ORIGINAL.
+        VERSIÓN CORREGIDA: fish_id definido en orden correcto
         """
         # Validación inicial
         if not self.last_result or not self.last_metrics:
@@ -2617,8 +2618,21 @@ class MainWindow(QMainWindow):
             factor_k = float(metrics.get('condition_factor', 0))
             confidence = float(self.last_result.get('confidence', 0))
 
-            # --- 2. PREPARAR IMAGEN ---
-            filename = f"AUTO_{timestamp.strftime('%Y%m%d_%H%M%S')}_L{length_cm:.1f}.jpg"
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # PASO 1: DEFINIR fish_id (ANTES DE USARLO)
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            try:
+                count_today = self.db.get_today_measurements_count()
+                fish_id = str(count_today + 1)
+                logger.info(f"Usando el contador diario para fish_id: {fish_id}")
+            except Exception as e:
+                fish_id = timestamp.strftime('%Y%m%d_%H%M%S')
+                logger.warning(f"Error en el contador diario, usando timestamp: {fish_id}")
+
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # PASO 2: PREPARAR IMAGEN CON fish_id YA DEFINIDO
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            filename = f"AUTO_{fish_id}_L{length_cm:.1f}_P{weight_g:.1f}_{timestamp.strftime('%Y%m%d_%H%M%S')}.jpg"
             filepath = os.path.join(Config.IMAGES_AUTO_DIR, filename)
             os.makedirs(Config.IMAGES_AUTO_DIR, exist_ok=True)
             
@@ -2626,7 +2640,9 @@ class MainWindow(QMainWindow):
             frame_left = self.last_result['frame_left'].copy()
             frame_top = self.last_result['frame_top'].copy()
             
-            # --- 3. DIBUJAR CONTORNOS ---
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # PASO 3: DIBUJAR CONTORNOS
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             contour_left = self.last_result.get('contour_left')
             contour_top = self.last_result.get('contour_top')
             
@@ -2648,44 +2664,62 @@ class MainWindow(QMainWindow):
                 cv2.resize(frame_top, (Config.SAVE_WIDTH, Config.SAVE_HEIGHT))
             ))
             
-            # --- 4. DIBUJAR TEXTOS EN LA IMAGEN ---
-            # Dentro de on_processing_complete, cuando guardas la captura
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # PASO 4: DIBUJAR OVERLAY (fish_id YA ESTÁ DEFINIDO)
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             info_auto = {
                 "tipo": "AUTO",
-                "numero": fish_id,
+                "numero": fish_id,  # ✅ AHORA fish_id YA EXISTE
                 "longitud": length_cm,
                 "peso": weight_g,
                 "fecha": timestamp.strftime('%Y-%m-%d %H:%M:%S')
             }
-            # Generamos la imagen con el panel estandarizado
             combined_final = self.draw_fish_overlay(combined, info_auto)
             cv2.imwrite(filepath, combined_final)
 
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # PASO 5: CONSULTAR API DE SENSORES
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            logger.info("=" * 60)
+            logger.info("🌐 Consultando sensores IoT externos (modo silencioso)...")
+            
             try:
                 api_data = SensorService.get_water_quality_data()
+                
+                if api_data and len(api_data) > 0:
+                    has_valid_data = any(
+                        v != 0 and v != 0.0 and v is not None 
+                        for v in api_data.values()
+                    )
+                    
+                    if has_valid_data:
+                        logger.info(f"✅ Datos de sensores sincronizados")
+                    else:
+                        logger.warning("⚠️  API devolvió datos en 0")
+                else:
+                    logger.warning("⚠️  SensorService devolvió diccionario vacío")
+                    api_data = {}
+                    
             except Exception as e_sensor:
-                logger.warning(f"⚠️ Sensor no responde, usando datos vacíos: {e_sensor}")
+                logger.warning(f"⚠️  Error al consultar sensores: {e_sensor}")
                 api_data = {}
-                
-            try:
-                count_today = self.db.get_today_measurements_count()
-                fish_id = f"AUTO_{str(count_today + 1)  }"
-                logger.info(f"Usando el contador diario para fish_id: {fish_id}")
-            except:
-                fish_id = f"AUTO_{timestamp.strftime('%Y%m%d_%H%M%S')}"
-                logger.warning(f"Error en el contador diario al utilizar la marca de tiempo: {fish_id}")
-                
+            
+            logger.info("=" * 60)
+            
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # PASO 6: PREPARAR DICCIONARIO DE DATOS
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             data = {
                 'timestamp': timestamp.isoformat(),
                 'fish_id': str(fish_id),
                 
-                # Datos principales (Floats)
+                # Datos principales
                 'length_cm': length_cm,
                 'height_cm': height_cm,   
                 'width_cm': width_cm,
                 'weight_g': weight_g,
                 
-                # Datos Manuales
+                # Datos Manuales (no aplican en auto)
                 'manual_length_cm': 0.0,
                 'manual_height_cm': 0.0,
                 'manual_width_cm': 0.0,
@@ -2700,53 +2734,27 @@ class MainWindow(QMainWindow):
                 'image_path': str(filepath),
                 'measurement_type': 'auto',
                 'notes': '[Medición Automática]',
-                'validation_errors': '',
-
+                'validation_errors': ''
             }
-            try:
-                api_data = SensorService.get_water_quality_data()
-                
-                if api_data and len(api_data) > 0:
-                    # Verificar si los datos son válidos (no todos ceros)
-                    has_valid_data = any(
-                        v != 0 and v != 0.0 and v is not None 
-                        for v in api_data.values()
-                    )
-                    
-                    if has_valid_data:
-                        # Agregar datos al diccionario
-                        data.update(api_data)
-                        logger.info(f"✅ Datos de sensores sincronizados correctamente:")
-                        for key, value in api_data.items():
-                            logger.info(f"   {key}: {value}")
-                    else:
-                        logger.warning("⚠️  API devolvió datos pero todos son 0")
-                        logger.warning("   Posibles causas:")
-                        logger.warning("   - Sensores no están transmitiendo")
-                        logger.warning("   - Sensores no calibrados")
-                        logger.warning("   - Valores por defecto de la API")
-                        # Agregar los datos aunque sean 0 para mantener la estructura
-                        data.update(api_data)
-                else:
-                    logger.warning("⚠️  SensorService devolvió diccionario vacío")
-                    logger.warning("   Posibles causas:")
-                    logger.warning("   - API no responde (timeout)")
-                    logger.warning("   - Sin conexión a internet")
-                    logger.warning("   - Servidor de sensores caído")
-                    logger.warning("   Se guardarán valores por defecto (0)")
-                    
-            except Exception as e:
-                logger.error(f"❌ Error consultando SensorService: {type(e).__name__}")
-                logger.error(f"   Mensaje: {str(e)}")
-                logger.error("   Se guardarán valores por defecto (0)")
             
-            logger.info("=" * 60)
+            # Agregar datos de sensores
+            if api_data:
+                data.update(api_data)
             
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            # GUARDAR EN BASE DE DATOS
-            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # PASO 7: GUARDAR EN BASE DE DATOS
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             measurement_id = self.db.save_measurement(data)
             
+            logger.info(
+                f"Auto-guardado silencioso: "
+                f"ID={measurement_id}, "
+                f"Fish={fish_id}, "
+                f"L={length_cm:.1f}cm, "
+                f"P={weight_g:.1f}g"
+            )
+            
+            # Deshabilitar botón guardar
             self.btn_save.setEnabled(False)
             
             # Actualizar interfaz sin bloquear
@@ -2754,13 +2762,14 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(100, self.refresh_daily_counter)
             
             if hasattr(self, 'status_bar'):
-                self.status_bar.set_status(f"Auto-Guardado #{measurement_id}")
+                self.status_bar.set_status(f"Auto-Guardado #{measurement_id}", "success")
             
             return True
             
         except Exception as e:
-            logger.error(f"FALLO en guardado automático: {e}")
-            QTimer.singleShot(100, self.unlock_after_save) 
+            logger.error(f"FALLO en guardado automático: {e}", exc_info=True)
+            if hasattr(self, 'unlock_after_save'):
+                QTimer.singleShot(100, self.unlock_after_save)
             return False
         
     def generate_daily_id(self):
