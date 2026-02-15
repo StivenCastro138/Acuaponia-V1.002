@@ -2353,20 +2353,49 @@ class MainWindow(QMainWindow):
             }
 
             try:
-                # Llamamos al servicio estático que consulta la URL externa
-                logger.info("Consultando sensores externos...")
                 api_data = SensorService.get_water_quality_data()
                 
-                # Si trajo datos, los mezclamos
-                if api_data:
-                    data.update(api_data)
-                    print(f"DEBUG - Datos de Sensores guardados: {api_data}")
+                if api_data and len(api_data) > 0:
+                    # Verificar si los datos son válidos (no todos ceros)
+                    has_valid_data = any(
+                        v != 0 and v != 0.0 and v is not None 
+                        for v in api_data.values()
+                    )
+                    
+                    if has_valid_data:
+                        # Agregar datos al diccionario
+                        data.update(api_data)
+                        logger.info(f"✅ Datos de sensores sincronizados correctamente:")
+                        for key, value in api_data.items():
+                            logger.info(f"   {key}: {value}")
+                    else:
+                        logger.warning("⚠️  API devolvió datos pero todos son 0")
+                        logger.warning("   Posibles causas:")
+                        logger.warning("   - Sensores no están transmitiendo")
+                        logger.warning("   - Sensores no calibrados")
+                        logger.warning("   - Valores por defecto de la API")
+                        # Agregar los datos aunque sean 0 para mantener la estructura
+                        data.update(api_data)
                 else:
-                    logger.warning("SensorService devolvió datos vacíos.")
+                    logger.warning("⚠️  SensorService devolvió diccionario vacío")
+                    logger.warning("   Posibles causas:")
+                    logger.warning("   - API no responde (timeout)")
+                    logger.warning("   - Sin conexión a internet")
+                    logger.warning("   - Servidor de sensores caído")
+                    logger.warning("   Se guardarán valores por defecto (0)")
                     
             except Exception as e:
-                logger.error(f"Error consultando SensorService: {e}")
+                logger.error(f"❌ Error consultando SensorService: {type(e).__name__}")
+                logger.error(f"   Mensaje: {str(e)}")
+                logger.error("   Se guardarán valores por defecto (0)")
+            
+            logger.info("=" * 60)
+            
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # GUARDAR EN BASE DE DATOS
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             measurement_id = self.db.save_measurement(data)
+
             
             logger.info(
                 f"Auto measurement saved: "
@@ -2675,19 +2704,47 @@ class MainWindow(QMainWindow):
 
             }
             try:
-                # Llamamos al servicio estático que consulta la URL externa
-                logger.info("Consultando sensores externos...")
                 api_data = SensorService.get_water_quality_data()
                 
-                # Si trajo datos, los mezclamos
-                if api_data:
-                    data.update(api_data)
-                    print(f"DEBUG - Datos de Sensores guardados: {api_data}")
+                if api_data and len(api_data) > 0:
+                    # Verificar si los datos son válidos (no todos ceros)
+                    has_valid_data = any(
+                        v != 0 and v != 0.0 and v is not None 
+                        for v in api_data.values()
+                    )
+                    
+                    if has_valid_data:
+                        # Agregar datos al diccionario
+                        data.update(api_data)
+                        logger.info(f"✅ Datos de sensores sincronizados correctamente:")
+                        for key, value in api_data.items():
+                            logger.info(f"   {key}: {value}")
+                    else:
+                        logger.warning("⚠️  API devolvió datos pero todos son 0")
+                        logger.warning("   Posibles causas:")
+                        logger.warning("   - Sensores no están transmitiendo")
+                        logger.warning("   - Sensores no calibrados")
+                        logger.warning("   - Valores por defecto de la API")
+                        # Agregar los datos aunque sean 0 para mantener la estructura
+                        data.update(api_data)
                 else:
-                    logger.warning("SensorService devolvió datos vacíos.")
+                    logger.warning("⚠️  SensorService devolvió diccionario vacío")
+                    logger.warning("   Posibles causas:")
+                    logger.warning("   - API no responde (timeout)")
+                    logger.warning("   - Sin conexión a internet")
+                    logger.warning("   - Servidor de sensores caído")
+                    logger.warning("   Se guardarán valores por defecto (0)")
                     
             except Exception as e:
-                logger.error(f"Error consultando SensorService: {e}")
+                logger.error(f"❌ Error consultando SensorService: {type(e).__name__}")
+                logger.error(f"   Mensaje: {str(e)}")
+                logger.error("   Se guardarán valores por defecto (0)")
+            
+            logger.info("=" * 60)
+            
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # GUARDAR EN BASE DE DATOS
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             measurement_id = self.db.save_measurement(data)
             
             self.btn_save.setEnabled(False)
@@ -3129,8 +3186,10 @@ class MainWindow(QMainWindow):
             self.current_page_offset = 0 # 
     
     def refresh_history(self):
-
-        if not hasattr(self, 'db'): return
+        """Recarga la tabla con filtros aplicados - VERSIÓN CORREGIDA"""
+        
+        if not hasattr(self, 'db'): 
+            return
         
         if not hasattr(self, 'current_page_offset'):
             self.current_page_offset = 0
@@ -3138,9 +3197,12 @@ class MainWindow(QMainWindow):
         search_text = self.txt_search.text().strip()
         
         filter_type = self.combo_filter_type.currentText()
-        if filter_type == "Todos": filter_type = None
-        elif filter_type == "Automáticas": filter_type = "auto"
-        elif filter_type == "Manuales": filter_type = "manual"
+        if filter_type == "Todos": 
+            filter_type = None
+        elif filter_type == "Automáticas": 
+            filter_type = "auto"
+        elif filter_type == "Manuales": 
+            filter_type = "manual"
         
         date_start = self.date_from.date().toString("yyyy-MM-dd")
         date_end = self.date_to.date().toString("yyyy-MM-dd")
@@ -3177,22 +3239,29 @@ class MainWindow(QMainWindow):
                 except IndexError:
                     return default
 
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # COLUMNAS FIJAS (0-10)
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            
+            # Columna 0: ID
             val_id = get_safe(0, 0)
             self.table_history.setItem(row, 0, QTableWidgetItem(str(val_id)))
             
+            # Columna 1: Fecha/Hora
             ts_str = str(get_safe(1, ""))
             try:
-                if "." in ts_str: ts_str = ts_str.split(".")[0] 
+                if "." in ts_str: 
+                    ts_str = ts_str.split(".")[0] 
                 ts_obj = datetime.fromisoformat(ts_str)
                 ts_nice = ts_obj.strftime('%d/%m/%Y %H:%M')
             except:
                 ts_nice = ts_str
             self.table_history.setItem(row, 1, QTableWidgetItem(ts_nice))
             
+            # Columna 2: Tipo
             val_type = str(get_safe(17, "auto")).upper()
             item_type = QTableWidgetItem(val_type)
             
-            # Colores
             if "MANUAL" in val_type:
                 item_type.setBackground(QColor("#fff3cd")) 
                 item_type.setForeground(QColor("#856404"))
@@ -3203,6 +3272,7 @@ class MainWindow(QMainWindow):
                 item_type.setBackground(QColor("#e7f1ff")) 
             self.table_history.setItem(row, 2, item_type)
             
+            # Columna 3: Pez ID
             val_fish = str(get_safe(2, "-"))
             self.table_history.setItem(row, 3, QTableWidgetItem(val_fish))
             
@@ -3210,23 +3280,29 @@ class MainWindow(QMainWindow):
                 try:
                     val = float(get_safe(idx, 0))
                     return f"{val:.{decimals}f}"
-                except: return "0.00"
+                except: 
+                    return "0.00"
 
+            # Columna 4: Largo (cm)
             self.table_history.setItem(row, 4, QTableWidgetItem(format_num(3)))
             
+            # Columna 5: Alto (cm)
             h_manual = float(get_safe(8, 0))
             h_ia = float(get_safe(4, 0))
             val_h = h_manual if h_manual > 0 else h_ia
             self.table_history.setItem(row, 5, QTableWidgetItem(f"{val_h:.2f}"))
             
+            # Columna 6: Ancho (cm)
             w_manual = float(get_safe(9, 0))
             w_ia = float(get_safe(5, 0))
             val_w = w_manual if w_manual > 0 else w_ia
             self.table_history.setItem(row, 6, QTableWidgetItem(f"{val_w:.2f}"))
             
+            # Columna 7: Peso (g)
             weight_val = float(get_safe(6, 0))
             self.table_history.setItem(row, 7, QTableWidgetItem(f"{weight_val:.2f}"))
             
+            # Columna 8: Factor K
             l_val = float(get_safe(3, 0)) 
             if l_val > 0 and weight_val > 0:
                 k = (100 * weight_val) / (l_val ** 3)
@@ -3235,6 +3311,7 @@ class MainWindow(QMainWindow):
                 k_str = "-"
             self.table_history.setItem(row, 8, QTableWidgetItem(k_str))
             
+            # Columna 9: Confianza
             conf = float(get_safe(14, 0))
             item_conf = QTableWidgetItem(f"{conf:.0%}")
             if conf < 0.85 and conf > 0:
@@ -3242,9 +3319,51 @@ class MainWindow(QMainWindow):
                 item_conf.setFont(QFont("Segoe UI", 9, QFont.Bold))
             self.table_history.setItem(row, 9, item_conf)
             
+            # Columna 10: Notas
             val_notes = str(get_safe(15, ""))
             self.table_history.setItem(row, 10, QTableWidgetItem(val_notes))
 
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # COLUMNAS API (11-18) - CÓDIGO QUE FALTABA
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            
+            # Los índices en MEASUREMENT_COLUMNS:
+            # 19: api_air_temp_c
+            # 20: api_water_temp_c
+            # 21: api_rel_humidity
+            # 22: api_abs_humidity_g_m3
+            # 23: api_ph
+            # 24: api_cond_us_cm
+            # 25: api_do_mg_l
+            # 26: api_turbidity_ntu
+            
+            api_indices = [19, 20, 21, 22, 23, 24, 25, 26]
+            start_col = 11  # Después de las columnas fijas
+            
+            for i, idx in enumerate(api_indices):
+                raw_val = get_safe(idx)
+                
+                # Visualización limpia
+                if raw_val is None or raw_val == "" or raw_val == 0:
+                    display_text = "-"
+                else:
+                    try:
+                        val_float = float(raw_val)
+                        if val_float == 0:
+                            display_text = "-"
+                        else:
+                            display_text = f"{val_float:.2f}"
+                    except:
+                        display_text = str(raw_val)
+                
+                item = QTableWidgetItem(display_text)
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.table_history.setItem(row, start_col + i, item)
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # ACTUALIZAR PAGINACIÓN Y CONTADORES
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        
         limit = int(self.combo_limit.currentText())
         current_page = (self.current_page_offset // limit) + 1
         self.lbl_page_info.setText(str(current_page))
