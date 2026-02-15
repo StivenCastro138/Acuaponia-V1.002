@@ -20,10 +20,15 @@ class FishTracker:
         self.max_length_change = 2.0  
         self.max_cv_threshold = 10.0  
     
-    def update(self, contour_left, contour_top, metrics, timestamp=None):
-        """Actualiza tracking usando ambas vistas (fusión espacial)."""
+    def update(self, metrics, **kwargs):  
+        """
+        Forzamos metrics como único argumento posicional necesario después de self.
+        """
+        contour_left = kwargs.get('contour_left')
+        contour_top = kwargs.get('contour_top')
+        timestamp = kwargs.get('timestamp', time.time())
 
-        if not metrics:
+        if metrics is None:
             return
 
         centroids = []

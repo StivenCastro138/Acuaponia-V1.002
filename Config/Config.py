@@ -53,12 +53,12 @@ class Config:
     # ==========================================================================
 
     # Cámara lateral
-    SCALE_LAT_FRONT = 0.006666   # Zona frontal (más cercana a la cámara)
-    SCALE_LAT_BACK = 0.014926    # Zona trasera (más lejana)
+    SCALE_LAT_FRONT = 0.00635786   # Zona frontal (7cm del lente)
+    SCALE_LAT_BACK  = 0.01827964   # Zona trasera (22cm del lente)
 
     # Cámara cenital
-    SCALE_TOP_FRONT = 0.004348
-    SCALE_TOP_BACK = 0.0125825
+    SCALE_TOP_FRONT = 0.00507581   # Zona cercana al lente
+    SCALE_TOP_BACK  = 0.01502311   # Zona alejada del lente
 
     # ==========================================================================
     # SEGMENTACIÓN POR COLOR (HSV)
@@ -168,7 +168,7 @@ class Config:
     
     # Índices de refracción
     N_AIRE = 1.0
-    N_ACRILICO = 1.49
+    N_ACRILICO = 1.5
     N_AGUA = 1.333
 
     # ==========================================================================

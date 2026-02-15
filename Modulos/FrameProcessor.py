@@ -20,7 +20,6 @@ from .FishTracker import FishTracker
 from .SimpleMotionDetector import SimpleMotionDetector
 from .BiometryService import BiometryService
 
-
 logger = logging.getLogger(__name__)
 
 class ProcessorSignals(QObject):
@@ -50,6 +49,7 @@ class FrameProcessor(QThread):
         self.frame_count = 0
         self.skip_validation = False 
         self.capture_requested = False
+        self.tracker = FishTracker()
         
         self.moondream_detector = moondream_detector_instance
         self._check_ai_status()
@@ -123,10 +123,10 @@ class FrameProcessor(QThread):
         try:
             start_time = time.time()
             
-            scale_front_left = params.get('scale_front_left', 0.006666)
-            scale_back_left = params.get('scale_back_left', 0.014926)
-            scale_front_top = params.get('scale_front_top', 0.004348)
-            scale_back_top = params.get('scale_back_top', 0.012582)
+            scale_front_left = params.get('scale_front_left', 0.00635786)
+            scale_back_left = params.get('scale_back_left', 0.01827964)
+            scale_front_top = params.get('scale_front_top', 0.00507581)
+            scale_back_top = params.get('scale_back_top', 0.01502311)
 
             hsv_left = {
                 'h_min': params.get('hue_left_min', 35),
@@ -174,53 +174,59 @@ class FrameProcessor(QThread):
                 return None
             
             ia_end = time.time()
-            ia_time_ms = (ia_end - ia_start) * 1000
+            ia_time_ms = (time.time() - ia_start) * 1000
             self.signals.ia_time_ready.emit(ia_time_ms)
+            # Añadir temporalmente para diagnosticar:
+            import inspect
+            sig = inspect.signature(self.tracker.update)
+            logger.info(f"DEBUG: Firma detectada de update: {sig}")
+            logger.info(f"DEBUG: Tipo de metrics: {type(metrics)}")
 
-            # 4. VALIDACIÓN DE RESULTADOS
-            if not metrics or metrics.get('length_cm', 0) <= 0:
-                self.signals.progress_update.emit("❌ No se detectó pez.")
+            # Llamada original
+            self.tracker.update(metrics=metrics, contour_left=c_lat, contour_top=c_top, timestamp=start_time)
+
+            # 3. VALIDACIÓN DE RESULTADOS
+            if metrics is None or metrics.get('length_cm', 0) <= 0:
                 self.signals.roi_status.emit(False)
                 return None
 
             self.signals.roi_status.emit(True)
-            self.signals.progress_update.emit("✅ Análisis completado.")
 
-            contour_lat = self._retrieve_contour_for_tracker(frame_left, hsv_left)
-            contour_top = self._retrieve_contour_for_tracker(frame_top, hsv_top)
+            # 4. EXTRACCIÓN DE CONTORNOS Y ACTUALIZACIÓN DEL TRACKER
+            c_lat = self._retrieve_contour_for_tracker(frame_left, hsv_left)
+            c_top = self._retrieve_contour_for_tracker(frame_top, hsv_top)
             
-            self.tracker.update(contour_lat, metrics, timestamp=start_time)
+            try:
+                self.tracker.update(
+                    metrics=metrics,           # Pásalo primero y por nombre
+                    contour_left=c_lat,
+                    contour_top=c_top,
+                    timestamp=start_time
+                )
+            except Exception as e:
+                logger.error(f"Error en FishTracker.update: {e}")
 
+            # 5. EMPAQUETADO DE RESULTADOS
+            is_stable = self.motion_detector.is_stable(frame_left)
             confidence = self._calculate_confidence(metrics, is_stable, ia_time_ms)
 
-            result = {
+            return {
                 'frame_left': img_lat_ann if img_lat_ann is not None else frame_left,
                 'frame_top': img_top_ann if img_top_ann is not None else frame_top,
-                'contour_left': contour_lat,
-                'contour_top': contour_top,
+                'contour_left': c_lat,
+                'contour_top': c_top,
                 'metrics': metrics,
                 'smoothed_metrics': self.tracker.get_smoothed_measurement(),
-                'is_consistent': self.tracker.get_tracking_stats()['is_consistent'],
+                'is_consistent': self.tracker.get_tracking_stats().get('is_consistent', False),
                 'confidence': confidence,
                 'processing_time': (time.time() - start_time) * 1000,
                 'ia_time': ia_time_ms,
                 'is_stable': is_stable,
-                'scale_left': scale_front_left,
-                'scale_top': scale_front_top,
-                'status': metrics.get('status', 'Procesado'),
-                'frame_count': self.frame_count
+                'status': metrics.get('status', 'OK')
             }
 
-            logger.info(
-                f"Frame procesado: L={metrics['length_cm']:.1f}cm, "
-                f"Conf={confidence:.1%}, T={ia_time_ms:.0f}ms."
-            )
-
-            return result
-
         except Exception as e:
-            logger.error(f"Error critico en process_frames: {str(e)}.", exc_info=True)
-            self.signals.progress_update.emit(f"❌ Error: {str(e)}")
+            logger.error(f"Error critico en process_frames: {str(e)}", exc_info=True)
             return None
 
     def _retrieve_contour_for_tracker(self, clean_frame, hsv_params):
