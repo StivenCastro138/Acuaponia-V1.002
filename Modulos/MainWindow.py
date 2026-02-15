@@ -112,7 +112,7 @@ class MainWindow(QMainWindow):
         "📷": "info", "▶️": "info", "⚙️": "info", "🧠": "info"
     }
     
-    def __init__(self, api_service=None):
+    def __init__(self, api_service: ApiService = None):
         super().__init__()
         self.api_service = api_service
         self.setWindowTitle("FishTrace v1.2b")
@@ -368,10 +368,10 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, 'tracker'):
             self.tracker.update(
-                contour_left,
-                contour_top,
-                metrics,
-                time.time()
+                metrics, 
+                contour_left=contour_left,  # Usar la variable ya extraída
+                contour_top=contour_top,    # Usar la variable ya extraída
+                timestamp=time.time()
             )
 
         confidence = float(result.get('confidence', 0.0))
@@ -2351,8 +2351,21 @@ class MainWindow(QMainWindow):
                 'notes': '[Medición Semiautomática]',
                 'validation_errors': ', '.join(validation_errors) if validation_errors else ''
             }
-            
-            data.update(api_data)
+
+            try:
+                # Llamamos al servicio estático que consulta la URL externa
+                logger.info("Consultando sensores externos...")
+                api_data = SensorService.get_water_quality_data()
+                
+                # Si trajo datos, los mezclamos
+                if api_data:
+                    data.update(api_data)
+                    print(f"DEBUG - Datos de Sensores guardados: {api_data}")
+                else:
+                    logger.warning("SensorService devolvió datos vacíos.")
+                    
+            except Exception as e:
+                logger.error(f"Error consultando SensorService: {e}")
             measurement_id = self.db.save_measurement(data)
             
             logger.info(
@@ -2661,7 +2674,20 @@ class MainWindow(QMainWindow):
                 'validation_errors': '',
 
             }
-            data.update(api_data)
+            try:
+                # Llamamos al servicio estático que consulta la URL externa
+                logger.info("Consultando sensores externos...")
+                api_data = SensorService.get_water_quality_data()
+                
+                # Si trajo datos, los mezclamos
+                if api_data:
+                    data.update(api_data)
+                    print(f"DEBUG - Datos de Sensores guardados: {api_data}")
+                else:
+                    logger.warning("SensorService devolvió datos vacíos.")
+                    
+            except Exception as e:
+                logger.error(f"Error consultando SensorService: {e}")
             measurement_id = self.db.save_measurement(data)
             
             self.btn_save.setEnabled(False)
@@ -2860,8 +2886,9 @@ class MainWindow(QMainWindow):
         self.table_history.setHorizontalHeaderLabels(all_columns)
 
         # Ocultar columnas opcionales
-        for col in range(len(self.fixed_columns), len(all_columns)):
-            self.table_history.setColumnHidden(col, True)
+        start_optional = len(self.fixed_columns)
+        for i in range(len(self.optional_columns)):
+            self.table_history.setColumnHidden(start_optional + i, True)
 
         # Ocultar ID técnico
         self.table_history.setColumnHidden(0, True)
@@ -2892,10 +2919,8 @@ class MainWindow(QMainWindow):
         header.customContextMenuRequested.connect(self.show_column_menu)
 
         layout.addWidget(self.table_history)
-        self.load_measurements()
 
         pagination_layout = QHBoxLayout()
-        
         self.lbl_total_records = QLabel("Total: 0 registros")
         self.lbl_total_records.setStyleSheet("color: gray; font-style: italic;")
         pagination_layout.addWidget(self.lbl_total_records)
@@ -2948,95 +2973,107 @@ class MainWindow(QMainWindow):
         
         # Inicializar
         self.current_page = 1
+        self.load_measurements()
         self.refresh_history()
         
         return widget
     
     def load_measurements(self):
-        """Carga mediciones en la tabla de historial"""
-
+        """
+        Carga los datos en la tabla. Versión FINAL y limpia.
+        """
         self.table_history.setRowCount(0)
+        
+        # 1. Obtener límite
+        try:
+            limit_val = int(self.combo_limit.currentText())
+        except:
+            limit_val = 50
 
-        results = self.db.get_filtered_measurements(limit=200)
+        # 2. Consultar base de datos
+        try:
+            results = self.db.get_filtered_measurements(
+                limit=limit_val,
+                search_query=self.txt_search.text(),
+                filter_type=self.combo_filter_type.currentText() if self.combo_filter_type.currentText() != "Todos" else None
+            )
+        except Exception as e:
+            logger.error(f"Error fatal consultando DB: {e}")
+            return
 
+        # 3. Iterar filas
         for row_data in results:
-            row_position = self.table_history.rowCount()
-            self.table_history.insertRow(row_position)
+            row_idx = self.table_history.rowCount()
+            self.table_history.insertRow(row_idx)
 
-            # =========================
-            # COLUMNAS FIJAS
-            # =========================
+            # --- COLUMNAS FIJAS ---
+            id_val = self.db.get_field_value(row_data, "id")
+            ts_val = self.db.get_field_value(row_data, "timestamp", "")
+            type_val = self.db.get_field_value(row_data, "measurement_type", "manual")
+            fish_val = self.db.get_field_value(row_data, "fish_id", "")
+            
+            l_val = f"{self.db.get_field_value(row_data, 'length_cm', 0):.2f}"
+            h_val = f"{self.db.get_field_value(row_data, 'height_cm', 0):.2f}"
+            w_val = f"{self.db.get_field_value(row_data, 'width_cm', 0):.2f}"
+            gr_val = f"{self.db.get_field_value(row_data, 'weight_g', 0):.2f}"
+            
+            k_val = "" 
+            conf_val = f"{self.db.get_field_value(row_data, 'confidence_score', 0):.2f}"
+            note_val = self.db.get_field_value(row_data, "notes", "")
 
-            id_val = self.db.get_field_value(row_data, "id", "")
-            timestamp = self.db.get_field_value(row_data, "timestamp", "")
-            measurement_type = self.db.get_field_value(row_data, "measurement_type", "")
-            fish_id = self.db.get_field_value(row_data, "fish_id", "")
-            length = self.db.get_field_value(row_data, "length_cm", 0)
-            height = self.db.get_field_value(row_data, "height_cm", 0)
-            width = self.db.get_field_value(row_data, "width_cm", 0)
-            weight = self.db.get_field_value(row_data, "weight_g", 0)
-            confidence = self.db.get_field_value(row_data, "confidence_score", 0)
-            notes = self.db.get_field_value(row_data, "notes", "")
+            fixed_values = [id_val, ts_val, type_val, fish_val, l_val, h_val, w_val, gr_val, k_val, conf_val, note_val]
 
-            fixed_values = [
-                id_val,
-                timestamp,
-                measurement_type,
-                fish_id,
-                f"{length:.2f}",
-                f"{height:.2f}",
-                f"{width:.2f}",
-                f"{weight:.2f}",
-                "",  # Factor K si lo calculas aparte
-                f"{confidence:.2f}",
-                notes
-            ]
-
-            for col, value in enumerate(fixed_values):
-                item = QTableWidgetItem(str(value))
-
-                # Alinear números a la derecha
-                if col >= 4 and col <= 9:
+            for col, val in enumerate(fixed_values):
+                item = QTableWidgetItem(str(val))
+                if col >= 4 and col <= 9: # Columnas numéricas
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                else:
+                else: 
                     item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                self.table_history.setItem(row_idx, col, item)
 
-                self.table_history.setItem(row_position, col, item)
+            # --- COLUMNAS DE LA API ---
+            api_keys = [
+                "api_air_temp_c", "api_water_temp_c", "api_rel_humidity",
+                "api_abs_humidity_g_m3", "api_ph", "api_cond_us_cm", 
+                "api_do_mg_l", "api_turbidity_ntu"
+            ]
+            
+            start_col = len(self.fixed_columns) 
 
-            # =========================
-            # COLUMNAS OPCIONALES
-            # =========================
+            for i, key in enumerate(api_keys):
+                raw_val = self.db.get_field_value(row_data, key)
+                
+                # Visualización limpia
+                if raw_val is None or raw_val == "":
+                    display_text = "-"
+                else:
+                    try:
+                        val_float = float(raw_val)
+                        display_text = f"{val_float:.2f}"
+                    except:
+                        display_text = str(raw_val)
 
-            optional_map = {
-                "api_air_temp_c": "Temp Aire (°C)",
-                "api_water_temp_c": "Temp Agua (°C)",
-                "api_rel_humidity": "Humedad Rel (%)",
-                "api_abs_humidity_g_m3": "Humedad Abs (g/m3)",
-                "api_ph": "pH",
-                "api_cond_us_cm": "Conductividad (µS/cm)",
-                "api_do_mg_l": "Oxígeno Disuelto (mg/L)",
-                "api_turbidity_ntu": "Turbidez (NTU)"
-            }
-
-            for i, (db_field, _) in enumerate(optional_map.items()):
-                col_index = len(self.fixed_columns) + i
-                value = self.db.get_field_value(row_data, db_field, "")
-
-                item = QTableWidgetItem("" if value == 0 else str(value))
+                item = QTableWidgetItem(display_text)
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.table_history.setItem(row_idx, start_col + i, item)
 
-                self.table_history.setItem(row_position, col_index, item)
-   
+        if hasattr(self, 'lbl_total_records'):
+            self.lbl_total_records.setText(f"Registros cargados: {len(results)}")
+
     def show_column_menu(self, position):
+        """Menú contextual para mostrar/ocultar columnas (Click derecho en cabecera)"""
         menu = QMenu(self)
 
         for i, name in enumerate(self.optional_columns):
+            # Calculamos el índice real en la tabla (después de las fijas)
             col_index = len(self.fixed_columns) + i
 
             action = QAction(name, self)
             action.setCheckable(True)
+            # Marcado si la columna NO está oculta
             action.setChecked(not self.table_history.isColumnHidden(col_index))
 
+            # Conectamos la acción
             action.triggered.connect(
                 lambda checked, c=col_index:
                     self.table_history.setColumnHidden(c, not checked)
@@ -3044,10 +3081,10 @@ class MainWindow(QMainWindow):
 
             menu.addAction(action)
 
+        # Mostrar menú en la posición del ratón
         header = self.table_history.horizontalHeader()
         menu.exec(header.mapToGlobal(position))
-
-
+        
     def edit_from_right_click(self, position):
         item = self.table_history.itemAt(position)
 
@@ -6280,7 +6317,7 @@ QPushButton[class="info"] {{
                 with open(Config.CONFIG_FILE, 'r') as f:
                     data = json.load(f)
                     self._parse_json_config(data)
-                logger.info("Configuración cargada desde JSON.")
+                logger.info("Configuracion cargada desde JSON.")
             except Exception as e:
                 logger.error(f"Error en JSON: {e}")
 
@@ -6289,7 +6326,7 @@ QPushButton[class="info"] {{
             last_calib = self.db.get_latest_calibration()
             if last_calib:
                 self._parse_db_calibration(last_calib)
-                logger.info("Calibración final sincronizada con la Base de Datos.")
+                logger.info("Calibracion final sincronizada con la Base de Datos.")
         except Exception as e:
             logger.warning(f"No se pudo acceder a la BD para calibración: {e}")
 

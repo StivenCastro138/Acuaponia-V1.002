@@ -38,7 +38,7 @@ rd /s /q dist
 
 echo.
 echo ======================================================
-echo          INSTALACIÓN FINALIZADA CON ÉXITO
+echo          INSTALACION FINALIZADA CON EXITO
 echo ======================================================
 echo El ejecutable ya esta en la carpeta raiz. 
 echo Al abrirlo se crearan las carpetas de Base de Datos y Eventos.

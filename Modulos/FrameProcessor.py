@@ -182,9 +182,6 @@ class FrameProcessor(QThread):
             logger.info(f"DEBUG: Firma detectada de update: {sig}")
             logger.info(f"DEBUG: Tipo de metrics: {type(metrics)}")
 
-            # Llamada original
-            self.tracker.update(metrics=metrics, contour_left=c_lat, contour_top=c_top, timestamp=start_time)
-
             # 3. VALIDACIÓN DE RESULTADOS
             if metrics is None or metrics.get('length_cm', 0) <= 0:
                 self.signals.roi_status.emit(False)
