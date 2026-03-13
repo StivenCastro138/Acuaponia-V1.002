@@ -1171,6 +1171,7 @@ class MainWindow(QMainWindow):
         self.btn_manual_capture.style().polish(self.btn_manual_capture)
         self.btn_manual_capture.setCursor(Qt.PointingHandCursor)
         self.btn_manual_capture.setToolTip("Congelar la imagen de las cámaras para iniciar la medición.")
+        self.btn_manual_capture.setShortcut("Space")
         self.btn_manual_capture.clicked.connect(self.handle_manual_capture_popout)
         self.btn_manual_capture.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         controls_container.addWidget(self.btn_manual_capture, 5)
@@ -1636,7 +1637,7 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.set_status("Carga externa cancelada.", "warning")
 
-    def _process_external_capture(self, image_path, is_mobile=False):
+    def _process_external_capture(self, image_path, is_mobile=False, medidas_movil=None):
         """Diálogo de registro biométrico para fotos externas/móviles"""
         image = cv2.imread(image_path)
         if image is None:
@@ -1679,14 +1680,17 @@ class MainWindow(QMainWindow):
         date_edit = QDateEdit()
         date_edit.setCalendarPopup(True)
         date_edit.setSpecialValueText("Seleccione fecha")
-        date_edit.setDate(QDate(2025, 10, 1))   
+        date_edit.setDate(QDate.currentDate())   
         date_edit.setMinimumDate(QDate(2025, 10, 1))
+        date_edit.setMaximumDate(QDate(2026, 6, 1))
         date_edit.setDisplayFormat("yyyy-MM-dd")
         date_edit.setToolTip("Fecha en la que se midió el pez.")
 
         time_edit = QTimeEdit()
         time_edit.setDisplayFormat("HH:mm")
-        time_edit.setTime(QTime(9, 0))  
+        time_edit.setTime(QTime.currentTime()) 
+        time_edit.setMinimumTime(QTime(7, 0))
+        time_edit.setMaximumTime(QTime(18,0))  
         time_edit.setToolTip("Hora en la que se midió el pez.")
         
         spin_length = self._create_biometric_spinbox('length')
@@ -1700,6 +1704,15 @@ class MainWindow(QMainWindow):
         
         spin_weight = self._create_biometric_spinbox('weight')
         spin_weight.setToolTip("Peso corporal total.")
+
+        if medidas_movil:
+            try:
+                if medidas_movil.get("peso"): spin_weight.setValue(float(medidas_movil["peso"]))
+                if medidas_movil.get("longitud"): spin_length.setValue(float(medidas_movil["longitud"]))
+                if medidas_movil.get("ancho"): spin_width.setValue(float(medidas_movil["ancho"]))
+                if medidas_movil.get("alto"): spin_height.setValue(float(medidas_movil["alto"]))
+            except ValueError:
+                print("Aviso: Algún valor enviado desde el móvil no era un número válido.") 
         
         txt_notes = QLineEdit()
         txt_notes.setPlaceholderText("Observaciones opcionales...")
@@ -1929,7 +1942,9 @@ class MainWindow(QMainWindow):
             if not mobile_capture_queue.empty():
                 try:
                     # Obtener ruta de la imagen
-                    image_path = mobile_capture_queue.get(block=False)
+                    paquete = mobile_capture_queue.get(block=False)
+                    image_path = paquete.get("path")
+                    medidas_recibidas = paquete.get("medidas")
                     
                     Config.logger.info(f"Captura móvil recibida: {image_path}")
                     
@@ -1937,7 +1952,7 @@ class MainWindow(QMainWindow):
                     timer.stop()
                     
                     # Actualizar estado
-                    lbl_status.setText("✅ ¡Imagen recibida!")
+                    lbl_status.setText("✅ ¡Imagen y datos recibidos!")
                     lbl_status.setStyleSheet("""
                         padding: 10px;
                         color: #2a9d8f;
@@ -1947,10 +1962,11 @@ class MainWindow(QMainWindow):
                     # Cerrar diálogo después de un breve delay para feedback visual
                     QTimer.singleShot(800, dialog.accept)
                     
-                    # Procesar la imagen capturada
+                    # Procesar la imagen capturada y pasar medidas
                     QTimer.singleShot(900, lambda: self._process_external_capture(
                         image_path, 
-                        is_mobile=True
+                        is_mobile=True,
+                        medidas_movil=medidas_recibidas # <- Pasamos el diccionario
                     ))
                     
                 except Exception as e:

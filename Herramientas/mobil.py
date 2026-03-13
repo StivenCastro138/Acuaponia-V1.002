@@ -110,266 +110,158 @@ def mobile_page():
                 --border: #3e3e42; 
                 --success: #2a9d8f;
                 --warning: #f77f00;
+                --input-bg: #333333;
             }
             * { box-sizing: border-box; }
             body { 
-                margin: 0; 
-                background: var(--bg); 
-                color: var(--text); 
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; 
-                padding-bottom: 30px;
-                -webkit-font-smoothing: antialiased;
+                margin: 0; background: var(--bg); color: var(--text); 
+                font-family: -apple-system, sans-serif; padding-bottom: 30px;
             }
             header { 
-                padding: 20px; 
-                background: linear-gradient(135deg, var(--primary), #0096c7);
-                text-align: center;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+                padding: 20px; background: linear-gradient(135deg, var(--primary), #0096c7);
+                text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.3);
             }
-            header h1 { margin: 0; font-size: 24px; }
-            header p { margin: 5px 0 0; font-size: 12px; opacity: 0.9; }
-            
             .container { padding: 20px; max-width: 600px; margin: 0 auto; }
             
             .photo-slot { 
-                background: var(--paper); 
-                border: 2px dashed var(--border); 
-                border-radius: 12px; 
-                padding: 20px; 
-                margin-bottom: 20px; 
-                text-align: center;
-                transition: all 0.3s ease;
+                background: var(--paper); border: 2px dashed var(--border); 
+                border-radius: 12px; padding: 20px; margin-bottom: 20px; text-align: center;
             }
-            .photo-slot.has-image { 
-                border: 2px solid var(--success); 
-                background: rgba(42, 157, 143, 0.1);
-            }
-            .photo-slot.optional {
-                opacity: 0.7;
-            }
+            .preview { width: 100%; max-height: 200px; object-fit: contain; margin: 15px 0; display: none; border-radius: 8px; }
+            .btn-select { background: var(--primary); color: white; padding: 12px; border-radius: 8px; width: 100%; display: inline-block; font-weight: bold; }
             
-            .label-tag { 
-                font-size: 16px; 
-                font-weight: bold; 
-                color: var(--primary); 
-                margin-bottom: 10px;
+            /* Estilos del Formulario de Medidas */
+            .measurements-card {
+                background: var(--paper); border-radius: 12px; padding: 20px;
+                margin-bottom: 20px; border: 1px solid var(--border);
             }
-            .required { color: var(--warning); font-size: 12px; }
-            
-            .preview { 
-                width: 100%; 
-                max-height: 250px; 
-                object-fit: contain; 
-                margin: 15px 0; 
-                display: none; 
-                border-radius: 8px; 
-                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            .measurements-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+            .input-group { margin-bottom: 10px; }
+            .input-group.full { grid-column: span 2; }
+            label { display: block; font-size: 12px; color: var(--primary); margin-bottom: 5px; font-weight: bold; }
+            input[type="number"] {
+                width: 100%; background: var(--input-bg); border: 1px solid var(--border);
+                color: white; padding: 12px; border-radius: 8px; font-size: 16px;
             }
-            
-            .btn-select {
-                background: var(--primary); 
-                color: white; 
-                border: none;
-                padding: 16px 24px; 
-                border-radius: 8px; 
-                width: 100%; 
-                font-weight: bold;
-                font-size: 16px;
-                cursor: pointer; 
-                display: inline-block;
-                transition: all 0.2s;
-                text-transform: uppercase;
-            }
-            .btn-select:active {
-                transform: scale(0.98);
-                background: #0096c7;
-            }
-            
+
             #btnSend {
                 background: linear-gradient(135deg, var(--success), #238276);
-                color: white; 
-                border: none;
-                padding: 20px; 
-                border-radius: 12px; 
-                width: 100%; 
-                font-size: 18px;
-                font-weight: bold; 
-                cursor: pointer; 
-                margin-top: 20px; 
-                display: none;
-                box-shadow: 0 4px 12px rgba(42, 157, 143, 0.4);
-                text-transform: uppercase;
-                letter-spacing: 1px;
+                color: white; border: none; padding: 20px; border-radius: 12px; 
+                width: 100%; font-size: 18px; font-weight: bold; margin-top: 20px; display: none;
             }
-            #btnSend:disabled {
-                opacity: 0.5;
-                cursor: not-allowed;
-            }
-            
             input[type="file"] { display: none; }
-            
-            .hint { 
-                font-size: 12px; 
-                color: #888; 
-                margin-top: 10px; 
-            }
-            
-            .status {
-                text-align: center;
-                padding: 15px;
-                border-radius: 8px;
-                margin: 20px 0;
-                display: none;
-            }
-            .status.success {
-                background: rgba(42, 157, 143, 0.2);
-                border: 1px solid var(--success);
-                color: var(--success);
-                display: block;
-            }
-            .status.error {
-                background: rgba(247, 127, 0, 0.2);
-                border: 1px solid var(--warning);
-                color: var(--warning);
-                display: block;
-            }
-            
-            .checkmark {
-                display: inline-block;
-                margin-left: 10px;
-                font-size: 20px;
-            }
+            .status { text-align: center; padding: 15px; border-radius: 8px; margin: 20px 0; display: none; }
         </style>
     </head>
     <body>
         <header>
-            <h1>🐟 Captura Biométrica</h1>
-            <p>Sistema de Medición de Truchas</p>
+            <h1>🐟 Captura FishTrace</h1>
+            <p>Registro de Biometría</p>
         </header>
         
         <div class="container">
-            <!-- Foto Lateral (Obligatoria) -->
             <div class="photo-slot" id="slot1">
-                <div class="label-tag">
-                    📸 VISTA LATERAL
-                    <span class="required">* OBLIGATORIA</span>
-                </div>
-                <img id="prev1" class="preview" alt="Vista lateral">
-                <label for="input1" class="btn-select">
-                    📷 Capturar / Seleccionar
-                </label>
+                <label for="input1" class="btn-select">📷 CAPTURAR FOTO LATERAL *</label>
+                <img id="prev1" class="preview">
                 <input type="file" id="input1" accept="image/*" capture="environment">
-                <div class="hint">Fotografía el pez de costado</div>
             </div>
 
-            <!-- Foto Cenital (Opcional) -->
-            <div class="photo-slot optional" id="slot2">
-                <div class="label-tag">
-                    📸 VISTA CENITAL
-                    <span style="color: #888; font-size: 12px;">(Opcional)</span>
-                </div>
-                <img id="prev2" class="preview" alt="Vista cenital">
-                <label for="input2" class="btn-select">
-                    📷 Capturar / Seleccionar
-                </label>
+            <div class="photo-slot" id="slot2">
+                <label for="input2" class="btn-select">📷 CAPTURAR FOTO CENITAL</label>
+                <img id="prev2" class="preview">
                 <input type="file" id="input2" accept="image/*" capture="environment">
-                <div class="hint">Fotografía el pez desde arriba</div>
+            </div>
+
+            <div class="measurements-card">
+                <div class="measurements-grid">
+                    <div class="input-group full">
+                        <label>PESO (gr)</label>
+                        <input type="number" id="peso" placeholder="0.00" step="0.01">
+                    </div>
+                    <div class="input-group">
+                        <label>LONGITUD (cm)</label>
+                        <input type="number" id="longitud" placeholder="0.0" step="0.1">
+                    </div>
+                    <div class="input-group">
+                        <label>ANCHO (cm)</label>
+                        <input type="number" id="ancho" placeholder="0.0" step="0.1">
+                    </div>
+                    <div class="input-group">
+                        <label>ALTO (cm)</label>
+                        <input type="number" id="alto" placeholder="0.0" step="0.1">
+                    </div>
+                </div>
             </div>
 
             <div id="status" class="status"></div>
-            
-            <button id="btnSend">
-                🚀 ENVIAR AL SISTEMA
-            </button>
+            <button id="btnSend">🚀 ENVIAR AL SISTEMA</button>
         </div>
 
         <script>
-            const inputs = [
-                document.getElementById('input1'), 
-                document.getElementById('input2')
-            ];
-            const previews = [
-                document.getElementById('prev1'), 
-                document.getElementById('prev2')
-            ];
-            const slots = [
-                document.getElementById('slot1'), 
-                document.getElementById('slot2')
-            ];
+            const input1 = document.getElementById('input1');
+            const prev1 = document.getElementById('prev1');
+            const input2 = document.getElementById('input2');
+            const prev2 = document.getElementById('prev2');
             const btnSend = document.getElementById('btnSend');
-            const statusDiv = document.getElementById('status');
 
-            // Manejo de selección de imágenes
-            inputs.forEach((input, index) => {
-                input.onchange = (e) => {
-                    const file = e.target.files[0];
-                    if (file) {
-                        // Validar tamaño (16MB)
-                        if (file.size > 16 * 1024 * 1024) {
-                            alert('⚠️ Imagen muy grande. Máximo 16MB permitido.');
-                            return;
-                        }
-
-                        const reader = new FileReader();
-                        reader.onload = (ex) => {
-                            previews[index].src = ex.target.result;
-                            previews[index].style.display = 'block';
-                            slots[index].classList.add('has-image');
-                            checkReady();
-                        };
-                        reader.readAsDataURL(file);
-                    }
-                };
-            });
-
-            function checkReady() {
-                // Mostrar botón solo si hay al menos la foto lateral
-                if (inputs[0].files[0]) {
+            function checkShowButton() {
+                if (input1.files.length > 0) {
                     btnSend.style.display = 'block';
                 }
             }
 
+            input1.onchange = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (ex) => {
+                        prev1.src = ex.target.result;
+                        prev1.style.display = 'block';
+                        checkShowButton();
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            input2.onchange = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (ex) => {
+                        prev2.src = ex.target.result;
+                        prev2.style.display = 'block';
+                        checkShowButton();
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+
             btnSend.onclick = async () => {
                 btnSend.disabled = true;
                 btnSend.innerHTML = '⏳ SUBIENDO...';
-                statusDiv.className = 'status';
-                statusDiv.style.display = 'none';
                 
                 const formData = new FormData();
-                if (inputs[0].files[0]) formData.append("foto1", inputs[0].files[0]);
-                if (inputs[1].files[0]) formData.append("foto2", inputs[1].files[0]);
+                if (input1.files[0]) formData.append("foto1", input1.files[0]);
+                if (input2.files[0]) formData.append("foto2", input2.files[0]);
+                
+                // Valores numéricos
+                formData.append("peso", document.getElementById('peso').value);
+                formData.append("longitud", document.getElementById('longitud').value);
+                formData.append("ancho", document.getElementById('ancho').value);
+                formData.append("alto", document.getElementById('alto').value);
 
                 try {
-                    const res = await fetch("/upload", { 
-                        method: "POST", 
-                        body: formData 
-                    });
-                    
+                    const res = await fetch("/upload", { method: "POST", body: formData });
                     if (res.ok) {
-                        statusDiv.className = 'status success';
-                        statusDiv.innerHTML = `
-                            <strong>✅ ¡Éxito!</strong><br>
-                            Imágenes recibidas correctamente.<br>
-                            <small>Completa el registro en la PC.</small>
-                        `;
-                        
-                        // Limpiar formulario
-                        setTimeout(() => {
-                            location.reload();
-                        }, 3000);
+                        alert("✅ Datos enviados con éxito");
+                        location.reload();
                     } else {
-                        throw new Error('Error del servidor');
+                        throw new Error("Error en servidor");
                     }
                 } catch (e) {
-                    statusDiv.className = 'status error';
-                    statusDiv.innerHTML = `
-                        <strong>❌ Error</strong><br>
-                        No se pudo conectar al servidor.<br>
-                        <small>Verifica la conexión WiFi.</small>
-                    `;
-                    
+                    alert("❌ Error de conexión");
                     btnSend.disabled = false;
-                    btnSend.innerHTML = '🔄 REINTENTAR';
+                    btnSend.innerHTML = '🚀 ENVIAR AL SISTEMA';
                 }
             };
         </script>
@@ -380,127 +272,97 @@ def mobile_page():
 @flask_app.route('/upload', methods=['POST'])
 def upload_from_mobile():
     """
-    Recibe imágenes del móvil, crea collage y notifica a la app.
+    Recibe imagen y medidas del móvil, procesa y notifica a la app principal.
     """
     global mobile_capture_queue
     
     try:
         cleanup_temp_files(Config.IMAGES_MANUAL_DIR)
         
+        # 1. Capturar las medidas del formulario (Nuevos campos)
+        medidas = {
+            "peso": request.form.get('peso', ""),
+            "longitud": request.form.get('longitud', ""),
+            "ancho": request.form.get('ancho', ""),
+            "alto": request.form.get('alto', ""),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+
         received_images = []
         temp_paths = []
 
-        # 1. Guardar archivos temporales
+        # 2. Guardar la imagen recibida
         for key in ("foto1", "foto2"):
-            if key not in request.files:
-                continue
-                
+            if key not in request.files: continue
             file_obj = request.files[key]
-            if not file_obj.filename:
-                continue
+            if not file_obj.filename: continue
 
-            # Crear nombre único
-            timestamp = int(time.time() * 1000)  
-            temp_filename = f"MOB_{timestamp}_{key}.jpg"
+            timestamp_ms = int(time.time() * 1000)
+            temp_filename = f"MOB_{timestamp_ms}_{key}.jpg"
             temp_path = os.path.join(Config.IMAGES_MANUAL_DIR, temp_filename)
             
-            # Guardar archivo
             file_obj.save(temp_path)
             temp_paths.append(temp_path)
             
-            # Abrir y validar imagen
             try:
                 img = Image.open(temp_path).convert("RGB")
                 received_images.append((img, key))
-                logger.info(f"Imagen recibida: {key} ({img.size})")
             except Exception as e:
-                logger.error(f"Error al procesar {key}: {e}")
-                os.remove(temp_path)
+                logger.error(f"Error procesando imagen: {e}")
                 continue
 
         if not received_images:
-            return jsonify({"error": "No se recibieron imágenes válidas"}), 400
+            return jsonify({"error": "No se recibió imagen"}), 400
 
-        # 2. Crear collage o guardar imagen única
+        # 3. Procesar imagen (Redimensionar/Etiquetar)
         timestamp = int(time.time())
-        result_path = os.path.join(
-            Config.IMAGES_MANUAL_DIR,
-            f"MOBILE_{timestamp}.jpg"
-        )
+        result_path = os.path.join(Config.IMAGES_MANUAL_DIR, f"MOBILE_{timestamp}.jpg")
 
         if len(received_images) == 2:
-            # --- COLLAGE DUAL ---
-            img1, label1 = received_images[0]
-            img2, label2 = received_images[1]
+            # Si llegaron ambas fotos, hacemos un collage lado a lado
+            img1_resized = resize_keep_aspect(received_images[0][0], TARGET_HEIGHT)
+            img2_resized = resize_keep_aspect(received_images[1][0], TARGET_HEIGHT)
             
-            # Redimensionar manteniendo aspecto
-            img1_resized = resize_keep_aspect(img1, TARGET_HEIGHT)
-            img2_resized = resize_keep_aspect(img2, TARGET_HEIGHT)
+            # Crear lienzo para el collage
+            total_width = img1_resized.width + img2_resized.width
+            collage = Image.new('RGB', (total_width, TARGET_HEIGHT))
+            collage.paste(img1_resized, (0, 0))
+            collage.paste(img2_resized, (img1_resized.width, 0))
             
-            # Agregar etiquetas
-            img1_labeled = add_label_to_image(img1_resized, "LATERAL")
-            img2_labeled = add_label_to_image(img2_resized, "CENITAL")
+            img_labeled = add_label_to_image(collage, "CAPTURA REMOTA (LATERAL + CENITAL)")
+            img_labeled.save(result_path, quality=TARGET_QUALITY, optimize=True)
             
-            # Crear collage horizontal
-            total_width = img1_labeled.width + img2_labeled.width
-            collage = Image.new("RGB", (total_width, TARGET_HEIGHT), (30, 30, 30))
-            collage.paste(img1_labeled, (0, 0))
-            collage.paste(img2_labeled, (img1_labeled.width, 0))
-            
-            collage.save(result_path, quality=TARGET_QUALITY, optimize=True)
-            logger.info(f"Collage creado: {result_path}")
-            
-        elif len(received_images) == 1:
-            # --- IMAGEN ÚNICA ---
+        else:
+            # Si solo llegó una foto (ej. solo la lateral)
             img, label = received_images[0]
             img_resized = resize_keep_aspect(img, TARGET_HEIGHT)
-            img_labeled = add_label_to_image(img_resized, "LATERAL")
+            
+            etiqueta = "LATERAL" if label == "foto1" else "CENITAL"
+            img_labeled = add_label_to_image(img_resized, f"CAPTURA REMOTA ({etiqueta})")
             img_labeled.save(result_path, quality=TARGET_QUALITY, optimize=True)
-            logger.info(f"Imagen unica guardada: {result_path}")
 
-        # 3. Notificar a la aplicación principal
+        # 4. ENVIAR PAQUETE A LA MAIN WINDOW
+        # Ahora enviamos un diccionario con la ruta Y las medidas
+        paquete_datos = {
+            "path": result_path,
+            "medidas": medidas
+        }
+
         try:
-            mobile_capture_queue.put(result_path, block=False)
-            logger.info(f"Imagen encolada para procesamiento: {result_path}")
+            mobile_capture_queue.put(paquete_datos, block=False)
+            logger.info(f"Paquete enviado a la cola: {medidas}")
         except Full:
-            logger.warning("Cola de captura movil llena. Imagen guardada pero no encolada.")
+            logger.warning("Cola llena")
 
-        # 4. Limpiar archivos temporales
-        for temp_path in temp_paths:
-            try:
-                os.remove(temp_path)
-            except Exception as e:
-                logger.warning(f"No se pudo eliminar {temp_path}: {e}")
+        # Limpieza de temporales
+        for tp in temp_paths: os.remove(tp)
 
-        return """
-        <html>
-        <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <style>
-                body {
-                    font-family: -apple-system, sans-serif;
-                    background: #1e1e1e;
-                    color: #e0e0e0;
-                    text-align: center;
-                    padding: 50px 20px;
-                }
-                h1 { color: #2a9d8f; }
-                p { line-height: 1.6; }
-                .emoji { font-size: 64px; margin: 20px; }
-            </style>
-        </head>
-        <body>
-            <div class="emoji">✅</div>
-            <h1>¡Imágenes Recibidas!</h1>
-            <p>Las fotografías se procesaron correctamente.</p>
-            <p><strong>Continúa en la computadora</strong> para completar el registro biométrico.</p>
-        </body>
-        </html>
-        """
+        return jsonify({"status": "success", "message": "Datos encolados"}), 200
 
     except Exception as e:
-        logger.error(f"Error en upload_from_mobile: {e}", exc_info=True)
+        logger.error(f"Error en upload: {e}")
         return jsonify({"error": str(e)}), 500
+
 
 @flask_app.route('/ping', methods=['GET'])
 def ping():
