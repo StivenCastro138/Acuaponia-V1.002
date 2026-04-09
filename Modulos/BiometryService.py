@@ -112,13 +112,32 @@ class BiometryService:
 
             # ============================================================
             # 3. ESTIMACIÓN BIOMÉTRICA (cm)
+            # Prioridad: contornos refinados por SAM -> fallback por cajas
             # ============================================================
-            metrics = MorphometricAnalyzer.estimate_from_dual_boxes(
-                box_lat=res_lat.bbox,
-                box_top=res_top.bbox if has_top else None, 
-                scale_lat=px_to_cm_lat,
-                scale_top=px_to_cm_top
-            )
+            has_lat_contour = res_lat.contour is not None and len(res_lat.contour) >= 5
+            has_top_contour = has_top and res_top.contour is not None and len(res_top.contour) >= 5
+
+            if has_lat_contour:
+                metrics = MorphometricAnalyzer.compute_advanced_metrics(
+                    contour_lat=res_lat.contour,
+                    contour_top=res_top.contour if has_top_contour else None,
+                    scale_lat=px_to_cm_lat,
+                    scale_top=px_to_cm_top if has_top else 0.0,
+                    spine_length_px=res_lat.spine_length if res_lat.spine_length > 0 else None
+                )
+                metrics['measurement_mode'] = 'advanced_contour'
+                if has_top and not has_top_contour:
+                    metrics.setdefault('_warnings', []).append(
+                        "Vista cenital sin contorno confiable: ancho estimado con fallback anatómico."
+                    )
+            else:
+                metrics = MorphometricAnalyzer.estimate_from_dual_boxes(
+                    box_lat=res_lat.bbox,
+                    box_top=res_top.bbox if has_top else None,
+                    scale_lat=px_to_cm_lat,
+                    scale_top=px_to_cm_top
+                )
+                metrics['measurement_mode'] = 'fallback_box'
 
             # ============================================================
             # 4. REFINAMIENTO CON ESQUELETO 
@@ -134,8 +153,33 @@ class BiometryService:
             metrics['box_lat'] = tuple(map(int, res_lat.bbox)) if res_lat and res_lat.bbox else None
             metrics['box_top'] = tuple(map(int, res_top.bbox)) if has_top and res_top and res_top.bbox else None
 
-            current_len = metrics.get('length_cm', 0)
-            best_length = max(current_len, spine_cm_lat, spine_cm_top)
+            current_len = float(metrics.get('length_cm', 0) or 0)
+            best_length = current_len
+
+            if current_len > 0:
+                tol = max(0.01, float(Config.LENGTH_FUSION_TOLERANCE_RATIO))
+                w_spine = min(0.95, max(0.0, float(Config.LENGTH_FUSION_SPINE_WEIGHT)))
+                w_top = min(0.95, max(0.0, float(Config.LENGTH_FUSION_TOP_WEIGHT)))
+
+                num = current_len
+                den = 1.0
+
+                if spine_cm_lat > 0:
+                    diff_lat = abs(spine_cm_lat - current_len) / current_len
+                    if diff_lat <= tol:
+                        num += spine_cm_lat * w_spine
+                        den += w_spine
+
+                if spine_cm_top > 0:
+                    diff_top = abs(spine_cm_top - current_len) / current_len
+                    if diff_top <= tol:
+                        num += spine_cm_top * w_top
+                        den += w_top
+
+                best_length = num / den if den > 0 else current_len
+            else:
+                candidates = [value for value in (spine_cm_lat, spine_cm_top) if value > 0]
+                best_length = sum(candidates) / len(candidates) if candidates else 0
             
             if best_length > 0:
                 metrics['length_cm'] = round(best_length, 2)
@@ -143,7 +187,10 @@ class BiometryService:
                 derived = MorphometricAnalyzer._calculate_derived_metrics(
                     length=metrics['length_cm'],
                     height=metrics.get('height_cm', 0),
-                    width=metrics.get('width_cm', 0)
+                    width=metrics.get('width_cm', 0),
+                    lat_area=metrics.get('lat_area_cm2'),
+                    top_area=metrics.get('top_area_cm2'),
+                    is_bent=bool(metrics.get('is_bent', False))
                 )
                 metrics.update(derived)
 
@@ -187,7 +234,7 @@ class BiometryService:
 
         # 1. Contorno 
         if result.contour is not None:
-             cv2.drawContours(vis, [result.contour], -1, color, 2)
+            cv2.drawContours(vis, [result.contour], -1, color, 2)
 
         # 2. Caja 
         if show_box and result.bbox:

@@ -114,6 +114,35 @@ class Config:
     WEIGHT_K = 0.0139
     WEIGHT_EXP = 3.02
 
+    # Corrección empírica global del peso (reduce sesgo positivo)
+    WEIGHT_GLOBAL_BIAS = 0.95
+
+    # Factores por rango longitudinal
+    WEIGHT_SHORT_FISH_FACTOR = 0.88
+    WEIGHT_LONG_FISH_FACTOR = 1.04
+
+    # Fusión de longitud (caja/contorno vs esqueleto)
+    LENGTH_FUSION_TOLERANCE_RATIO = 0.12
+    LENGTH_FUSION_SPINE_WEIGHT = 0.35
+    LENGTH_FUSION_TOP_WEIGHT = 0.25
+    LENGTH_TOP_DISCREPANCY_RATIO = 0.18
+    LENGTH_TOP_SUPPORT_WEIGHT = 0.20
+
+    # Correcciones globales de salida (anti-sesgo, ajustables con CSV histórico)
+    LENGTH_CORRECTION_FACTOR = 0.951
+    HEIGHT_CORRECTION_FACTOR = 0.967
+    WIDTH_CORRECTION_FACTOR = 0.707
+    WEIGHT_CORRECTION_FACTOR = 0.936
+
+    # Estabilización geométrica para volumen/peso
+    EXPECTED_WIDTH_HEIGHT_RATIO = 0.52
+    MIN_WIDTH_RATIO = 0.10
+    WIDTH_CONFIDENCE_TOLERANCE = 0.35
+    WEIGHT_ALPHA_HIGH_CONF = 0.82
+    WEIGHT_ALPHA_LOW_CONF = 0.94
+    WEIGHT_VOL_LOWER_RATIO = 0.65
+    WEIGHT_VOL_UPPER_RATIO = 1.45
+
     # ==========================================================================
     # VALIDACIÓN DE MEDICIONES
     # ==========================================================================
