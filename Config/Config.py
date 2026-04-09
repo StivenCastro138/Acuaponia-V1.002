@@ -57,8 +57,8 @@ class Config:
     SCALE_LAT_BACK  = 0.01827964   # Zona trasera (22cm del lente)
 
     # Cámara cenital
-    SCALE_TOP_FRONT = 0.00507581   # Zona cercana al lente
-    SCALE_TOP_BACK  = 0.01502311   # Zona alejada del lente
+    SCALE_TOP_FRONT = 0.004429   # Zona cercana al lente
+    SCALE_TOP_BACK  = 0.013108   # Zona alejada del lente
 
     # ==========================================================================
     # SEGMENTACIÓN POR COLOR (HSV)
@@ -95,7 +95,7 @@ class Config:
     MIN_HEIGHT_RATIO = 0.1
     MAX_HEIGHT_RATIO = 0.4
 
-    DEFAULT_WIDTH_RATIO = 0.18
+    DEFAULT_WIDTH_RATIO = 0.15
     MAX_WIDTH_RATIO_ADULT = 0.25
 
     ALEVIN_THRESHOLD_CM = 15.0
@@ -108,11 +108,11 @@ class Config:
     TROUT_DENSITY = 1.04
 
     # Factor de forma (ajuste volumétrico del modelo elipsoidal)
-    FORM_FACTOR = 0.76
+    FORM_FACTOR = 1.07
 
     # Relación alométrica Peso–Longitud: W = K * L^b
-    WEIGHT_K = 0.0139
-    WEIGHT_EXP = 3.02
+    WEIGHT_K = 0.2
+    WEIGHT_EXP = 1.88
 
     # Corrección empírica global del peso (reduce sesgo positivo)
     WEIGHT_GLOBAL_BIAS = 0.95
