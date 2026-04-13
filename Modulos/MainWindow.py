@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
         # CONFIGURACIÓN INICIAL DE LÓGICA 
         os.makedirs(Config.OUT_DIR, exist_ok=True)
         self.db = DatabaseManager()
+        self.active_batch_id = f"TANDA_{datetime.now().strftime('%Y%m%d')}"
         
         self.advanced_detector = AdvancedDetector()
         self.processor = FrameProcessor(self.advanced_detector)
@@ -192,6 +193,8 @@ class MainWindow(QMainWindow):
         self._cam_health_top = "warning"
         self._auto_reconnect_attempts = 0
         self._auto_reconnect_running = False
+        self._camera_failure_window_start = 0.0
+        self._camera_grace_until = 0.0
         self._microcuts_left = deque()
         self._microcuts_top = deque()
         self.settings_dirty = False
@@ -236,6 +239,7 @@ class MainWindow(QMainWindow):
             'start_fullscreen_on_launch': True,
             'sensor_bar_refresh_seconds': 2,
             'sensor_top_bar_visible': True,
+            'active_batch_id': self.active_batch_id,
             'sensor_env_ranges': {
                 'temp_agua': (18.0, 32.0),
                 'ph': (6.5, 8.5),
@@ -436,7 +440,7 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            total_records = self.db.get_filtered_measurements_count()
+            total_records = self.db.get_filtered_measurements_count(batch_id=self._selected_stats_batch())
         except Exception:
             total_records = 0
 
@@ -890,13 +894,9 @@ class MainWindow(QMainWindow):
             self.confidence_bar.style().polish(self.confidence_bar)
 
     def get_next_fish_number(self) -> int:
-        """Calcula el siguiente número secuencial basado en el total de registros"""
+        """Calcula el siguiente número secuencial para la tanda activa."""
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM measurements")
-                count = cursor.fetchone()[0]
-                return count + 1
+            return self.db.get_next_fish_number(batch_id=self.get_active_batch_id())
         except Exception as e:
             logger.error(f"Error calculando secuencia: {e}.")
             return 1
@@ -931,7 +931,7 @@ class MainWindow(QMainWindow):
                 
             
                 if hasattr(self, 'db'):
-                    next_num = self.db.get_next_fish_number()
+                    next_num = self.db.get_next_fish_number(batch_id=self.get_active_batch_id())
                 else:
                     next_num = int(time.time()) 
                 
@@ -1871,7 +1871,7 @@ class MainWindow(QMainWindow):
         # ID
         txt_fish_id = QLineEdit()
         if hasattr(self, 'db'):
-            next_num = self.db.get_next_fish_number()
+            next_num = self.db.get_next_fish_number(batch_id=self.get_active_batch_id())
             txt_fish_id.setText(f"EXT_{next_num}") 
         
         txt_fish_id.setPlaceholderText("Ej: Lote_01")
@@ -2007,6 +2007,7 @@ class MainWindow(QMainWindow):
                 'timestamp': timestamp.isoformat(),
                 'fish_id': fish_id,
                 'measurement_type': 'manual_externo_pc',
+                'batch_id': self.get_active_batch_id(),
                 
                 # Campos principales
                 'length_cm': spin_length.value(),
@@ -2036,6 +2037,7 @@ class MainWindow(QMainWindow):
             
             self.db.save_measurement(data)
             self.refresh_history()
+            self.refresh_batch_selectors()
             dialog.accept()
             QMessageBox.information(self, "✅ Guardado", 
                                     "La medición externa se registró correctamente.")
@@ -2084,8 +2086,8 @@ class MainWindow(QMainWindow):
         
         txt_id = QLineEdit()
         if hasattr(self, 'db'):
-             prefix = "QR" if is_mobile else "EXT"
-             txt_id.setText(f"{prefix}_{self.db.get_next_fish_number()}")
+                        prefix = "QR" if is_mobile else "EXT"
+                        txt_id.setText(f"{prefix}_{self.db.get_next_fish_number(batch_id=self.get_active_batch_id())}")
             
         txt_id.setPlaceholderText("Ej: TRUCHA-001")
         txt_id.setToolTip("Número identificador único para el pez.")
@@ -2211,6 +2213,7 @@ class MainWindow(QMainWindow):
                     'timestamp': timestamp.isoformat(),
                     'fish_id': txt_id.text().strip(),
                     'measurement_type': 'manual_qr' if is_mobile else 'manual_externo_pc',
+                    'batch_id': self.get_active_batch_id(),
                     
                     # Campos principales
                     'length_cm': spin_length.value(),
@@ -2242,6 +2245,7 @@ class MainWindow(QMainWindow):
                 if db:
                     db.save_measurement(data)
                     self.refresh_history()
+                    self.refresh_batch_selectors()
                     dialog.accept()
                 else:
                     raise Exception("Base de datos no disponible")
@@ -2492,6 +2496,220 @@ class MainWindow(QMainWindow):
                 logger.error(f"Error al refrescar contador diario: {e}.")
                 self.status_bar.set_measurement_count(0)
 
+    def _normalize_batch_id(self, raw_value: str) -> str:
+        """Normaliza nombre de tanda para evitar caracteres conflictivos."""
+        cleaned = re.sub(r'[^a-zA-Z0-9_-]+', '_', str(raw_value or '').strip())
+        cleaned = re.sub(r'_+', '_', cleaned).strip('_')
+        if not cleaned:
+            cleaned = f"TANDA_{datetime.now().strftime('%Y%m%d')}"
+        return cleaned[:50]
+
+    def get_active_batch_id(self) -> str:
+        """Retorna la tanda activa usada para nuevas mediciones."""
+        return self._normalize_batch_id(getattr(self, 'active_batch_id', ''))
+
+    def _selected_history_batch(self):
+        if not hasattr(self, 'combo_filter_batch'):
+            return None
+        value = self.combo_filter_batch.currentText().strip()
+        return None if value in ("", "Todas", "Todos") else value
+
+    def _excluded_history_batches(self):
+        if not hasattr(self, 'txt_exclude_batches'):
+            return []
+        raw = self.txt_exclude_batches.text().strip()
+        if not raw:
+            return []
+        parts = [self._normalize_batch_id(x) for x in raw.split(',') if x.strip()]
+        unique = []
+        for batch in parts:
+            if batch not in unique:
+                unique.append(batch)
+        return unique
+
+    def _selected_stats_batch(self):
+        if not hasattr(self, 'combo_stats_batch'):
+            return None
+        value = self.combo_stats_batch.currentText().strip()
+        return None if value in ("", "Todas", "Todos") else value
+
+    def refresh_batch_selectors(self):
+        """Sincroniza combos de tandas en historial y estadísticas."""
+        batches = self.db.get_distinct_batches() if hasattr(self, 'db') else []
+        active = self.get_active_batch_id()
+        if active and active not in batches:
+            batches.insert(0, active)
+
+        for combo_name in ('combo_filter_batch', 'combo_stats_batch', 'combo_cfg_active_batch', 'combo_cfg_manage_batch'):
+            if not hasattr(self, combo_name):
+                continue
+            combo = getattr(self, combo_name)
+            current = combo.currentText().strip()
+            combo.blockSignals(True)
+            combo.clear()
+            if combo_name in ('combo_filter_batch', 'combo_stats_batch'):
+                combo.addItem("Todas")
+            for batch in batches:
+                combo.addItem(batch)
+
+            target = current or active
+            idx = combo.findText(target)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            elif combo.count() > 0:
+                combo.setCurrentIndex(0)
+            combo.blockSignals(False)
+
+        if hasattr(self, 'lbl_cfg_active_batch'):
+            self.lbl_cfg_active_batch.setText(self.get_active_batch_id())
+
+        if hasattr(self, 'txt_batch_range_name') and not self.txt_batch_range_name.text().strip():
+            self.txt_batch_range_name.setText(self.get_active_batch_id())
+
+        self.refresh_batch_management_panel()
+
+    def set_active_batch_from_ui(self):
+        """Aplica la tanda activa elegida para próximas mediciones."""
+        if not hasattr(self, 'combo_cfg_active_batch'):
+            return
+        selected = self.combo_cfg_active_batch.currentText().strip()
+        self.active_batch_id = self._normalize_batch_id(selected)
+        self.refresh_batch_selectors()
+        self.generate_daily_id()
+        self.status_bar.set_status(f"Tanda activa: {self.active_batch_id}", "success")
+
+    def create_new_batch(self):
+        """Crea/activa una nueva tanda sin borrar datos previos."""
+        base_name = f"TANDA_{datetime.now().strftime('%Y%m%d')}"
+        text, ok = QInputDialog.getText(
+            self,
+            "Nueva Tanda",
+            "Nombre de la nueva tanda:",
+            text=base_name,
+        )
+        if not ok:
+            return
+
+        new_batch = self._normalize_batch_id(text)
+
+        reply = QMessageBox.question(
+            self,
+            "Activar nueva tanda",
+            (
+                f"Tanda creada: {new_batch}\n\n"
+                "¿Desea activarla ahora para que la siguiente medición ya entre a esta tanda?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.active_batch_id = new_batch
+            self.refresh_batch_selectors()
+            self.generate_daily_id()
+            self.status_bar.set_status(f"Nueva tanda activa: {self.active_batch_id}", "success")
+        else:
+            if hasattr(self, 'combo_cfg_active_batch'):
+                self.combo_cfg_active_batch.setCurrentText(new_batch)
+            self.status_bar.set_status(
+                f"Tanda {new_batch} preparada. Actívela con 'Usar Tanda' cuando corresponda.",
+                "info",
+            )
+
+    def refresh_batch_management_panel(self):
+        """Refresca listado resumen de tandas en Configuración."""
+        if not hasattr(self, 'tbl_batch_summary'):
+            return
+
+        rows = self.db.get_batch_summaries() if hasattr(self, 'db') else []
+        self.tbl_batch_summary.setRowCount(len(rows))
+        for i, row in enumerate(rows):
+            self.tbl_batch_summary.setItem(i, 0, QTableWidgetItem(str(row.get('batch_id', ''))))
+            self.tbl_batch_summary.setItem(i, 1, QTableWidgetItem(str(row.get('total', 0))))
+            self.tbl_batch_summary.setItem(i, 2, QTableWidgetItem(str(row.get('first_day') or '-')))
+            self.tbl_batch_summary.setItem(i, 3, QTableWidgetItem(str(row.get('last_day') or '-')))
+
+    def _selected_management_batch(self):
+        if not hasattr(self, 'combo_cfg_manage_batch'):
+            return ""
+        return self.combo_cfg_manage_batch.currentText().strip()
+
+    def rename_selected_batch(self):
+        old_batch = self._selected_management_batch()
+        if not old_batch:
+            self.status_bar.set_status("Seleccione una tanda para renombrar", "warning")
+            return
+
+        text, ok = QInputDialog.getText(self, "Renombrar tanda", "Nuevo nombre:", text=old_batch)
+        if not ok:
+            return
+        new_batch = self._normalize_batch_id(text)
+        changed = self.db.rename_batch(old_batch, new_batch)
+        if changed > 0:
+            if self.get_active_batch_id() == old_batch:
+                self.active_batch_id = new_batch
+            self.refresh_batch_selectors()
+            self.generate_daily_id()
+            self.status_bar.set_status(f"Tanda renombrada: {old_batch} -> {new_batch}", "success")
+        else:
+            self.status_bar.set_status("No hubo cambios al renombrar", "warning")
+
+    def delete_selected_batch(self):
+        batch = self._selected_management_batch()
+        if not batch:
+            self.status_bar.set_status("Seleccione una tanda para eliminar", "warning")
+            return
+
+        replacement = "TANDA_1" if batch != "TANDA_1" else self.get_active_batch_id()
+        reply = QMessageBox.question(
+            self,
+            "Eliminar tanda",
+            (
+                f"La tanda {batch} se eliminará y sus registros se reasignarán a {replacement}.\n\n"
+                "¿Desea continuar?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        changed = self.db.delete_batch(batch, replacement_batch_id=replacement)
+        if changed > 0:
+            if self.get_active_batch_id() == batch:
+                self.active_batch_id = replacement
+            self.refresh_batch_selectors()
+            self.refresh_history()
+            self.generate_statistics()
+            self.status_bar.set_status(f"Tanda {batch} eliminada (reasignada a {replacement})", "success")
+        else:
+            self.status_bar.set_status("No se pudieron reasignar registros de la tanda", "warning")
+
+    def assign_batch_range_from_settings(self):
+        """Asigna una tanda a un rango de fechas desde Configuración."""
+        if not hasattr(self, 'date_batch_from') or not hasattr(self, 'date_batch_to'):
+            return
+
+        date_start = self.date_batch_from.date().toString("yyyy-MM-dd")
+        date_end = self.date_batch_to.date().toString("yyyy-MM-dd")
+        if self.date_batch_from.date() > self.date_batch_to.date():
+            self.status_bar.set_status("Rango inválido en gestión de tandas", "warning")
+            return
+
+        target_batch = self._normalize_batch_id(self.txt_batch_range_name.text().strip()) if hasattr(self, 'txt_batch_range_name') else ""
+        if not target_batch:
+            self.status_bar.set_status("Ingrese nombre de tanda destino", "warning")
+            return
+
+        changed = self.db.assign_batch_by_date_range(target_batch, date_start, date_end)
+        self.refresh_batch_selectors()
+        self.refresh_history()
+        self.generate_statistics()
+        self.status_bar.set_status(
+            f"Asignadas {changed} mediciones a {target_batch} ({date_start} -> {date_end})",
+            "success",
+        )
+
     def discard_manual_photo(self):
         """Limpia la foto capturada y resetea la interfaz con estados limpios"""
         self.manual_frame_left = None
@@ -2722,13 +2940,13 @@ class MainWindow(QMainWindow):
             top_area_cm2 = float(metrics.get('top_area_cm2', 0.0))
             volume_cm3 = float(metrics.get('volume_cm3', 0.0))
             confidence = float(self.last_result.get('confidence', 0.8))
+            batch_id = self.get_active_batch_id()
             
             timestamp = datetime.now()
             
             try:
-                count_today = self.db.get_today_measurements_count()
-                fish_id = str(count_today + 1)  
-                logger.info(f"Usando el contador diario para fish_id: {fish_id}")
+                fish_id = str(self.db.get_next_fish_number(batch_id=batch_id))
+                logger.info(f"Usando contador por tanda (%s) para fish_id: %s", batch_id, fish_id)
             except:
                 fish_id = f"AUTO_{timestamp.strftime('%Y%m%d_%H%M%S')}"
                 logger.warning(f"Error en el contador diario al utilizar la marca de tiempo: {fish_id}")
@@ -2811,6 +3029,7 @@ class MainWindow(QMainWindow):
                 'scale_top': self.last_result.get('scale_top', self.scale_front_top),
                 'image_path': filepath,
                 'measurement_type': 'auto',
+                'batch_id': batch_id,
                 'notes': '[Medición Semiautomática]',
                 'validation_errors': ', '.join(validation_errors) if validation_errors else ''
             }
@@ -2877,6 +3096,7 @@ class MainWindow(QMainWindow):
             self.current_page_offset = 0
             QApplication.processEvents()
             self.refresh_history()
+            self.refresh_batch_selectors()
             self.refresh_daily_counter()
 
             if self.auto_capture_enabled:
@@ -3051,6 +3271,7 @@ class MainWindow(QMainWindow):
             
             'confidence_score': 1.0,
             'measurement_type': 'manual', 
+            'batch_id': self.get_active_batch_id(),
             'notes': str(notes),
             'image_path': str(filepath),
             'validation_errors': ', '.join(validation_errors) if validation_errors else '',
@@ -3067,6 +3288,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Guardado", f"Medición #{m_id} guardada con éxito.")
             self.discard_manual_photo()
             self.refresh_history()
+            self.refresh_batch_selectors()
             self.generate_daily_id()
             self.refresh_daily_counter()
             
@@ -3104,14 +3326,14 @@ class MainWindow(QMainWindow):
             # Calculamos Factor K para la imagen
             factor_k = float(metrics.get('condition_factor', 0))
             confidence = float(self.last_result.get('confidence', 0))
+            batch_id = self.get_active_batch_id()
 
             # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             # PASO 1: DEFINIR fish_id (ANTES DE USARLO)
             # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             try:
-                count_today = self.db.get_today_measurements_count()
-                fish_id = str(count_today + 1)
-                logger.info(f"Usando el contador diario para fish_id: {fish_id}")
+                fish_id = str(self.db.get_next_fish_number(batch_id=batch_id))
+                logger.info(f"Usando contador por tanda (%s) para fish_id: %s", batch_id, fish_id)
             except Exception as e:
                 fish_id = timestamp.strftime('%Y%m%d_%H%M%S')
                 logger.warning(f"Error en el contador diario, usando timestamp: {fish_id}")
@@ -3220,6 +3442,7 @@ class MainWindow(QMainWindow):
                 'confidence_score': confidence,
                 'image_path': str(filepath),
                 'measurement_type': 'auto',
+                'batch_id': batch_id,
                 'notes': '[Medición Automática]',
                 'validation_errors': ''
             }
@@ -3246,6 +3469,7 @@ class MainWindow(QMainWindow):
             
             # Actualizar interfaz sin bloquear
             QTimer.singleShot(100, self.refresh_history)
+            QTimer.singleShot(120, self.refresh_batch_selectors)
             QTimer.singleShot(100, self.refresh_daily_counter)
             
             if hasattr(self, 'status_bar'):
@@ -3265,7 +3489,7 @@ class MainWindow(QMainWindow):
             db = getattr(self, 'db_manager', getattr(self, 'db', None))
             
             if db:
-                next_id = db.get_next_fish_number()
+                next_id = db.get_next_fish_number(batch_id=self.get_active_batch_id())
             else:
                 next_id = 1
 
@@ -3380,6 +3604,21 @@ class MainWindow(QMainWindow):
         )
         self.combo_filter_type.currentTextChanged.connect(self.reset_pagination_and_refresh)
         filter_layout.addWidget(self.combo_filter_type, 0, 3)
+
+        filter_layout.addWidget(QLabel("Tanda:"), 0, 4)
+        self.combo_filter_batch = QComboBox()
+        self.combo_filter_batch.setCursor(Qt.PointingHandCursor)
+        self.combo_filter_batch.setToolTip("Filtra el historial por tanda de producción.")
+        self.combo_filter_batch.addItem("Todas")
+        self.combo_filter_batch.currentTextChanged.connect(self.reset_pagination_and_refresh)
+        filter_layout.addWidget(self.combo_filter_batch, 0, 5)
+
+        filter_layout.addWidget(QLabel("Excluir tandas:"), 2, 0)
+        self.txt_exclude_batches = QLineEdit()
+        self.txt_exclude_batches.setPlaceholderText("Ej: TANDA_1,TANDA_20260413")
+        self.txt_exclude_batches.setToolTip("Lista separada por comas de tandas a excluir del historial.")
+        self.txt_exclude_batches.returnPressed.connect(self.reset_pagination_and_refresh)
+        filter_layout.addWidget(self.txt_exclude_batches, 2, 1, 1, 3)
         
         # Fecha Desde
         filter_layout.addWidget(QLabel("Desde:"), 1, 0)
@@ -3422,7 +3661,7 @@ class MainWindow(QMainWindow):
         btn_clear.clicked.connect(self.clear_filters) 
         btn_container.addWidget(btn_clear)
         
-        filter_layout.addLayout(btn_container, 1, 4)
+        filter_layout.addLayout(btn_container, 2, 4, 1, 2)
 
         layout.addWidget(filter_group)
         
@@ -3573,6 +3812,7 @@ class MainWindow(QMainWindow):
         self.current_page = 1
         self.current_page_offset = 0
         self.history_total_records = 0
+        self.refresh_batch_selectors()
         self.load_measurements()
         
         return widget
@@ -3620,6 +3860,10 @@ class MainWindow(QMainWindow):
         """Resetea los filtros y limpia la búsqueda visualmente"""
         self.txt_search.clear()
         self.combo_filter_type.setCurrentIndex(0) 
+        if hasattr(self, 'combo_filter_batch'):
+            self.combo_filter_batch.setCurrentIndex(0)
+        if hasattr(self, 'txt_exclude_batches'):
+            self.txt_exclude_batches.clear()
         
         self.date_from.setDate(QDate.currentDate().addDays(-90))
         self.date_to.setDate(QDate.currentDate())
@@ -3673,6 +3917,9 @@ class MainWindow(QMainWindow):
             filter_type = "auto"
         elif filter_type == "Manuales": 
             filter_type = "manual"
+
+        batch_filter = self._selected_history_batch()
+        excluded_batches = self._excluded_history_batches()
         
         date_start = self.date_from.date().toString("yyyy-MM-dd")
         date_end = self.date_to.date().toString("yyyy-MM-dd")
@@ -3697,6 +3944,8 @@ class MainWindow(QMainWindow):
         self.history_total_records = self.db.get_filtered_measurements_count(
             search_query=search_text,
             filter_type=filter_type,
+            batch_id=batch_filter,
+            excluded_batch_ids=excluded_batches,
             date_start=date_start,
             date_end=date_end
         )
@@ -3706,6 +3955,8 @@ class MainWindow(QMainWindow):
             offset=self.current_page_offset,
             search_query=search_text,
             filter_type=filter_type,
+            batch_id=batch_filter,
+            excluded_batch_ids=excluded_batches,
             date_start=date_start,
             date_end=date_end
         )
@@ -3718,6 +3969,8 @@ class MainWindow(QMainWindow):
                 offset=self.current_page_offset,
                 search_query=search_text,
                 filter_type=filter_type,
+                batch_id=batch_filter,
+                excluded_batch_ids=excluded_batches,
                 date_start=date_start,
                 date_end=date_end
             )
@@ -3888,6 +4141,8 @@ class MainWindow(QMainWindow):
         quick_totals = self.db.get_filtered_measurements_quick_totals(
             search_query=search_text,
             filter_type=filter_type,
+            batch_id=batch_filter,
+            excluded_batch_ids=excluded_batches,
             date_start=date_start,
             date_end=date_end
         )
@@ -4112,9 +4367,18 @@ class MainWindow(QMainWindow):
         self.btn_toggle_stats_report.setToolTip("Mostrar u ocultar el panel de reporte detallado.")
         self.btn_toggle_stats_report.toggled.connect(self.toggle_statistics_report)
         controls.addWidget(self.btn_toggle_stats_report)
+
+        controls.addWidget(QLabel("Tanda estadísticas:"))
+        self.combo_stats_batch = QComboBox()
+        self.combo_stats_batch.setCursor(Qt.PointingHandCursor)
+        self.combo_stats_batch.setToolTip("Define qué tanda usar para estadísticas y exportes.")
+        self.combo_stats_batch.addItem("Todas")
+        self.combo_stats_batch.currentTextChanged.connect(lambda _text: self.generate_statistics())
+        controls.addWidget(self.combo_stats_batch)
         
         controls.addStretch()
         layout.addLayout(controls)
+        self.refresh_batch_selectors()
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self._stats_splitter_handle_width = self.splitter.handleWidth()
@@ -4260,7 +4524,7 @@ class MainWindow(QMainWindow):
         )
         btn_export_pdf.clicked.connect(self.export_stats_pdf)  
         tools_layout.addWidget(btn_export_pdf)
-        
+
         # Botón Abrir Carpeta
         btn_folder = QPushButton("Abrir Carpeta de Resultados")
         btn_folder.setProperty("class", "info")
@@ -4410,7 +4674,7 @@ class MainWindow(QMainWindow):
         from scipy.optimize import curve_fit 
 
         # 1. Obtener Datos
-        measurements = self.db.get_filtered_measurements(limit=3000)
+        measurements = self.db.get_filtered_measurements(limit=3000, batch_id=self._selected_stats_batch())
         if not measurements:
             QMessageBox.warning(self, "Advertencia", "No hay datos en la base de datos.")
             return
@@ -6041,6 +6305,81 @@ QPushButton[class="info"] {{
 
         layout.addWidget(schedule_group)
 
+        batch_group = QGroupBox("Gestión de Tandas")
+        batch_layout = QGridLayout(batch_group)
+
+        batch_layout.addWidget(QLabel("Tanda activa captura:"), 0, 0)
+        self.combo_cfg_active_batch = QComboBox()
+        self.combo_cfg_active_batch.setEditable(True)
+        self.combo_cfg_active_batch.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.combo_cfg_active_batch.setToolTip("Las nuevas mediciones se guardan en esta tanda.")
+        batch_layout.addWidget(self.combo_cfg_active_batch, 0, 1)
+
+        btn_cfg_apply_batch = QPushButton("Usar Tanda")
+        btn_cfg_apply_batch.setProperty("class", "info")
+        btn_cfg_apply_batch.clicked.connect(self.set_active_batch_from_ui)
+        batch_layout.addWidget(btn_cfg_apply_batch, 0, 2)
+
+        btn_cfg_new_batch = QPushButton("Nueva Tanda")
+        btn_cfg_new_batch.setProperty("class", "secondary")
+        btn_cfg_new_batch.clicked.connect(self.create_new_batch)
+        batch_layout.addWidget(btn_cfg_new_batch, 0, 3)
+
+        self.lbl_cfg_active_batch = QLabel(self.get_active_batch_id())
+        self.lbl_cfg_active_batch.setProperty("class", "report-text")
+        batch_layout.addWidget(self.lbl_cfg_active_batch, 0, 4)
+
+        batch_layout.addWidget(QLabel("Gestionar tanda:"), 1, 0)
+        self.combo_cfg_manage_batch = QComboBox()
+        self.combo_cfg_manage_batch.setToolTip("Seleccione una tanda para renombrar o eliminar.")
+        batch_layout.addWidget(self.combo_cfg_manage_batch, 1, 1)
+
+        btn_cfg_rename = QPushButton("Renombrar")
+        btn_cfg_rename.setProperty("class", "secondary")
+        btn_cfg_rename.clicked.connect(self.rename_selected_batch)
+        batch_layout.addWidget(btn_cfg_rename, 1, 2)
+
+        btn_cfg_delete = QPushButton("Eliminar tanda")
+        btn_cfg_delete.setProperty("class", "warning")
+        btn_cfg_delete.clicked.connect(self.delete_selected_batch)
+        batch_layout.addWidget(btn_cfg_delete, 1, 3)
+
+        batch_layout.addWidget(QLabel("Rango fecha desde:"), 2, 0)
+        self.date_batch_from = QDateEdit()
+        self.date_batch_from.setCalendarPopup(True)
+        self.date_batch_from.setDisplayFormat("yyyy-MM-dd")
+        self.date_batch_from.setDate(QDate.currentDate().addDays(-7))
+        batch_layout.addWidget(self.date_batch_from, 2, 1)
+
+        batch_layout.addWidget(QLabel("Hasta:"), 2, 2)
+        self.date_batch_to = QDateEdit()
+        self.date_batch_to.setCalendarPopup(True)
+        self.date_batch_to.setDisplayFormat("yyyy-MM-dd")
+        self.date_batch_to.setDate(QDate.currentDate())
+        batch_layout.addWidget(self.date_batch_to, 2, 3)
+
+        batch_layout.addWidget(QLabel("Asignar a tanda:"), 3, 0)
+        self.txt_batch_range_name = QLineEdit()
+        self.txt_batch_range_name.setPlaceholderText("Ej: TANDA_2")
+        batch_layout.addWidget(self.txt_batch_range_name, 3, 1)
+
+        btn_cfg_assign_range = QPushButton("Aplicar rango")
+        btn_cfg_assign_range.setProperty("class", "primary")
+        btn_cfg_assign_range.clicked.connect(self.assign_batch_range_from_settings)
+        batch_layout.addWidget(btn_cfg_assign_range, 3, 2)
+
+        self.tbl_batch_summary = QTableWidget()
+        self.tbl_batch_summary.setColumnCount(4)
+        self.tbl_batch_summary.setHorizontalHeaderLabels(["Tanda", "Registros", "Primera fecha", "Última fecha"])
+        self.tbl_batch_summary.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tbl_batch_summary.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl_batch_summary.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tbl_batch_summary.verticalHeader().setVisible(False)
+        self.tbl_batch_summary.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        batch_layout.addWidget(self.tbl_batch_summary, 4, 0, 1, 5)
+
+        layout.addWidget(batch_group)
+
         btn_save_config = QPushButton("Guardar Configuración")
         self.btn_save_config = btn_save_config
         btn_save_config.setProperty("class", "primary")
@@ -6075,6 +6414,7 @@ QPushButton[class="info"] {{
             chroma_group,
             advanced_group,
             schedule_group,
+            batch_group,
         ):
             section.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
@@ -6082,6 +6422,7 @@ QPushButton[class="info"] {{
 
         self._update_settings_camera_indicator(self.cameras_connected)
         self._set_fine_tune_enabled(self.cameras_connected)
+        self.refresh_batch_selectors()
         self._setup_settings_dirty_tracking()
         self._set_settings_dirty(False)
 
@@ -7290,6 +7631,8 @@ QPushButton[class="info"] {{
             self._left_signal_failures = 0
             self._top_signal_failures = 0
             self._auto_reconnect_attempts = 0
+            self._camera_failure_window_start = 0.0
+            self._camera_grace_until = time.time() + 2.0
             self._microcuts_left.clear()
             self._microcuts_top.clear()
 
@@ -7340,6 +7683,8 @@ QPushButton[class="info"] {{
         self._camera_read_failures = 0
         self._left_signal_failures = 0
         self._top_signal_failures = 0
+        self._camera_failure_window_start = 0.0
+        self._camera_grace_until = 0.0
         self.cameras_connected = False
         self.update_camera_dependent_buttons(False)
         self._configure_camera_tabs(False)
@@ -7455,13 +7800,25 @@ QPushButton[class="info"] {{
         self._update_camera_health_indicators(left_state, top_state, left_detail, top_detail)
 
         if not (ret_l and ret_t):
+            now = time.time()
+
+            if now < self._camera_grace_until:
+                return
+
+            if self._camera_failure_window_start <= 0:
+                self._camera_failure_window_start = now
+
             self._camera_read_failures += 1
-            if self._camera_read_failures >= 6:
+            fail_window_seconds = max(1.2, 12.0 / max(1, Config.PREVIEW_FPS))
+            loss_duration = now - self._camera_failure_window_start
+
+            if self._camera_read_failures >= 8 and loss_duration >= fail_window_seconds:
                 self._handle_camera_failure("Se perdió la conexión de cámaras durante la captura")
                 self._request_auto_reconnect("sin señal en stream")
             return
 
         self._camera_read_failures = 0
+        self._camera_failure_window_start = 0.0
 
         # Guardamos referencia para cuentagotas (sin copiar memoria)
         self.current_frame_left = frame_l
@@ -7729,6 +8086,88 @@ QPushButton[class="info"] {{
         if reply == QMessageBox.StandardButton.Yes:
             self._execute_measurement_deletion(measurement_id)
 
+    def start_new_measurement_cycle(self):
+        """Inicia una nueva tanda, respaldando y limpiando mediciones sin afectar calibración."""
+        try:
+            total = self.db.get_filtered_measurements_count()
+        except Exception:
+            total = 0
+
+        if total <= 0:
+            QMessageBox.information(
+                self,
+                "Sin datos",
+                "No hay mediciones para reiniciar. La base ya está vacía.",
+            )
+            return
+
+        reply_main = QMessageBox.question(
+            self,
+            "Iniciar Nueva Tanda",
+            (
+                "Se respaldarán las mediciones actuales y luego se reiniciará la tabla de mediciones.\n\n"
+                f"Registros detectados: {total}\n\n"
+                "Esta acción NO borra calibraciones ni perfiles de especie.\n"
+                "¿Desea continuar?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply_main != QMessageBox.StandardButton.Yes:
+            return
+
+        reply_images = QMessageBox.question(
+            self,
+            "Eliminar imágenes",
+            "¿También desea eliminar las imágenes físicas asociadas a esas mediciones?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.No,
+        )
+        if reply_images == QMessageBox.StandardButton.Cancel:
+            return
+
+        delete_images = reply_images == QMessageBox.StandardButton.Yes
+        backup_dir = os.path.join(getattr(Config, 'CSV_DIR', os.path.join("Resultados", "CSV")), "Respaldos")
+
+        result = self.db.reset_measurements_cycle(
+            backup_dir=backup_dir,
+            delete_images=delete_images,
+        )
+
+        if not result.get("success"):
+            err = "\n".join(result.get("errors", [])) or "Error desconocido"
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"No se pudo reiniciar la tanda:\n{err}",
+            )
+            self.status_bar.set_status("Error al reiniciar tanda", "error")
+            return
+
+        self.current_page_offset = 0
+        self.refresh_history()
+        self.refresh_daily_counter()
+        self.generate_daily_id()
+        self.generate_statistics()
+
+        backup_path = result.get("backup_path")
+        deleted_rows = int(result.get("deleted_rows", 0) or 0)
+        deleted_images = int(result.get("deleted_images", 0) or 0)
+
+        details = [
+            f"Registros reiniciados: {deleted_rows}",
+            f"Imágenes eliminadas: {deleted_images}",
+        ]
+        if backup_path:
+            details.append(f"Respaldo: {backup_path}")
+
+        QMessageBox.information(
+            self,
+            "Nueva Tanda Iniciada",
+            "Se reinició correctamente la tanda de mediciones.\n\n" + "\n".join(details),
+        )
+        self.status_bar.set_status("Nueva tanda iniciada: contador en cero", "success")
+
     def _execute_measurement_deletion(self, measurement_id):
         """Lógica interna de borrado físico y lógico"""
         try:
@@ -7992,7 +8431,7 @@ QPushButton[class="info"] {{
         """
 
         # 1. Obtener datos
-        measurements = self.db.get_filtered_measurements(limit=3000)
+        measurements = self.db.get_filtered_measurements(limit=3000, batch_id=self._selected_stats_batch())
         
         if not measurements:
             QMessageBox.warning(self, "Advertencia", "No Hay Mediciones Para Exportar")
@@ -8172,6 +8611,7 @@ QPushButton[class="info"] {{
         
         conn = None
         try:
+            selected_batch = self._selected_stats_batch()
             
             # 2. CONEXIÓN DIRECTA A LA BASE DE DATOS
             conn = sqlite3.connect(self.db.db_path)
@@ -8179,7 +8619,13 @@ QPushButton[class="info"] {{
             cursor = conn.cursor()
             
             # 3. OBTENER DATOS Y ESTRUCTURA REAL
-            cursor.execute("SELECT * FROM measurements")
+            if selected_batch:
+                cursor.execute(
+                    "SELECT * FROM measurements WHERE COALESCE(batch_id, '') = ?",
+                    (selected_batch,),
+                )
+            else:
+                cursor.execute("SELECT * FROM measurements")
             rows = cursor.fetchall()
             
             if not rows:
@@ -8228,7 +8674,8 @@ QPushButton[class="info"] {{
             QMessageBox.information(
                 self, "Éxito", 
                 f"✅ Base de datos exportada correctamente:\n{filename}\n\n"
-                f"📊 Total de registros: {len(rows)}"
+                f"📊 Total de registros: {len(rows)}\n"
+                f"🧪 Tanda: {selected_batch or 'Todas'}"
             )
             if hasattr(self, 'status_bar'):
                 self.status_bar.set_status(f"CSV se ha generado en:\n{filename}", "success")
@@ -8265,7 +8712,7 @@ QPushButton[class="info"] {{
         if not path: return
 
         # 3. Obtener datos
-        measurements = self.db.get_filtered_measurements(limit=3000)
+        measurements = self.db.get_filtered_measurements(limit=3000, batch_id=self._selected_stats_batch())
         if not measurements:
             QMessageBox.warning(self, "Sin Datos", "No hay registros para generar el informe.")
             return
@@ -8636,7 +9083,7 @@ QPushButton[class="info"] {{
         if hasattr(self, 'gallery_list'):
             self.gallery_list.clear()
         
-        measurements = self.db.get_filtered_measurements(limit=2000)
+        measurements = self.db.get_filtered_measurements(limit=2000, batch_id=self._selected_stats_batch())
         
         if not measurements:
             self._render_statistics_empty_state(
@@ -9243,6 +9690,7 @@ QPushButton[class="info"] {{
             },
             'species_profiles': self.species_profiles,
             'active_species_profile': self.active_species_profile_name,
+            'active_batch_id': self.get_active_batch_id(),
             'auto_capture_schedule': {
                 'enabled': self.auto_capture_schedule_enforced,
                 'start_hour': self.auto_capture_allowed_start_hour,
@@ -9557,6 +10005,10 @@ QPushButton[class="info"] {{
                 self.start_fullscreen_on_launch = bool(
                     ui_behavior.get('start_fullscreen_on_launch', self.start_fullscreen_on_launch)
                 )
+
+            self.active_batch_id = self._normalize_batch_id(
+                data.get('active_batch_id', self.active_batch_id)
+            )
 
             self.sensor_bar_refresh_seconds = max(1, int(data.get('sensor_bar_refresh_seconds', self.sensor_bar_refresh_seconds)))
             self.sensor_top_bar_visible = bool(data.get('sensor_top_bar_visible', self.sensor_top_bar_visible))
